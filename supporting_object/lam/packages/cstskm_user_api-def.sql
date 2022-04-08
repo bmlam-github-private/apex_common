@@ -1,0 +1,7 @@
+CREATE OR REPLACE PACKAGE cstskm_user_api
+AS
+
+END;
+/
+
+SHOW ERRORS 
