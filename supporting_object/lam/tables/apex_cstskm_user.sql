@@ -1,12 +1,12 @@
 CREATE TABLE apex_cstskm_user
-( id NUMBER(10) NOT NULL GENERATED ALWAYS AS IDENTITY
-  ,user_uniq_name   VARCHAR2(30) NOT NULL CHECK ( userid = UPPER( user_uniq_name ))
-  ,hashed   RAW(40) NOT NULL 
+( id NUMBER(10)  GENERATED ALWAYS AS IDENTITY NOT NULL 
+  ,user_uniq_name   VARCHAR2(30) NOT NULL CHECK ( user_uniq_name = UPPER( user_uniq_name ))
+  ,hashed   VARCHAR2(40) NOT NULL 
   ,created  DATE NOT NULL 
   ,created_by  VARCHAR2(30) NOT NULL 
   ,updated  DATE  NULL 
   ,updated_by  VARCHAR2(30)  NULL 
-  ,CONSTRAINT PRIMARY KEY (id)
+  ,PRIMARY KEY (id)
 )
 ;
 
