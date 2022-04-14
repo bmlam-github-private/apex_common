@@ -9,17 +9,24 @@ PROCEDURE add_access
  ,p_strict_checks BOOLEAN DEFAULT FALSE -- raise error on possible dupes, locked account, reactivation etc 
 ) ;
 
-function sentry_basic_auth
-RETURN BOOLEAN;
-
-FUNCTION check_credential -- can be used for custom scheme
+PROCEDURE replace_password 
 ( p_user_uniq_name VARCHAR2
  ,p_password VARCHAR2
- ,p_target_app VARCHAR2 DEFAULT NULL 
+) ;
+
+FUNCTION my_authentication 
+( p_username VARCHAR2  -- name is hardcoded by APEX
+ ,p_password VARCHAR2 -- name is hardcoded by APEX
 ) RETURN BOOLEAN 
 ;
 
-PROCEDURE invalid_session_basic_auth;
+PROCEDURE my_invalid_session_basic_auth;
+
+FUNCTION my_sentry_basic_auth
+RETURN BOOLEAN;
+
+PROCEDURE my_post_logout
+;
 
 END;
 /
