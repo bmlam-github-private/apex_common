@@ -6,6 +6,14 @@ AS
    1. compute the hash based for given new usernamne and password to add a new user entry
    2. validates the given password against the username
 */
+
+FUNCTION audit_user 
+RETURN VARCHAR2
+AS 
+BEGIN   
+    RETURN coalesce( V('APP_USER'), user );
+END audit_user;
+
 PROCEDURE check_or_create_credential (
      p_user_uniq_name IN VARCHAR2
     ,p_password IN VARCHAR2 
@@ -22,7 +30,6 @@ BEGIN
         ||' p_create_new: '||sys.diutil.bool_to_int( p_create_new)
         ||' p_replace_password: '||sys.diutil.bool_to_int( p_replace_password)
         );
-    pck_std_log.inf( 'p_password: '||p_password);
 
     IF p_create_new AND p_replace_password THEN 
         RAISE_APPLICATION_ERROR( -20001, 'Cannot create new account and replace password in one call!');
@@ -37,7 +44,7 @@ BEGIN
             ) VALUES 
             ( l_user, 'xxx'
                 , sysdate 
-                , coalesce( V('APP_USER'), user )
+                , audit_user() 
             ) RETURNING id INTO l_id 
             ;
         EXCEPTION 
@@ -203,6 +210,80 @@ is
 begin
     pck_std_log.inf( 'User '||v( 'APP_USER') ||' logged out from '||v( 'APP_NAME')||' session '||v( 'APPSESSION'));
 end my_post_logout;
+
+PROCEDURE request_account
+(  p_user_uniq_name               VARCHAR2                         
+  ,p_password                     VARCHAR2                          
+  ,p_target_app                   VARCHAR2   DEFAULT NULL              
+) AS 
+/*
+        This procedure will add a row to the user table in status REQUEST, the same applies to table App-user-role relation. Somewhere there is a lookup table for configured app-specific roles and one of the row will have the flag BASIC. 
+*/
+BEGIN
+null;
+END request_account;
+
+PROCEDURE request_app_roles
+ ( p_user_uniq_name               VARCHAR2                         
+  ,p_target_app                   VARCHAR2                           
+  ,p_role_csv                     VARCHAR2                           
+ ) AS 
+ /*
+        This procedure will  add rows in the request table for App-user-role relation in PENDING status 
+*/
+    l_user_id apex_cstskm_user.id%TYPE;
+BEGIN
+    BEGIN
+        SELECT id INTO l_user_id 
+        FROM apex_cstskm_user
+        WHERE user_uniq_name = p_user_uniq_name
+        ;
+    EXCEPTION 
+            WHEN no_data_found THEN 
+                RAISE_APPLICATION_ERROR( -20001, 'User '||p_user_uniq_name||' not found in customer user table!' );
+    END;
+    FOR rec IN (
+        SELECT column_value AS role_name
+        FROM TABLE( RE$NAME_ARRAY (p_role_csv, ',') )
+    ) LOOP
+        BEGIN
+            MERGE INTO apex_cstskm_app_role_request z
+            USING (
+                SELECT rec.role_name AS role_name
+                    , p_target_app AS app_name
+                    , l_user_id AS user_id
+                FROM dual
+            ) q
+            ON (  q.user_id = z.user_id
+              AND q.app_name = z.app_name
+              AND q.role_name = z.app_name
+            )
+            WHEN MATCHED THEN 
+                UPDATE 
+                SET updated = sysdate, updated_by = audit_user()
+                WHERE status = 'PENDING'
+        END;
+    END LOOP;
+null;
+END request_app_roles;
+
+   
+PROCEDURE set_app_roles
+ ( p_user_uniq_name               VARCHAR2                         
+  ,p_target_app                   VARCHAR2                           
+  ,p_role_csv                     VARCHAR2     
+  ,p_role_csv_flag                VARCHAR2                       
+ ) AS 
+ /*
+        the Flag has these meanings 
+            INS: add roles in the CSV       
+            DEL: remove roles in the CSV       
+            UPD: replace roles with CSV. If CSV is empty, all roles are removed.     
+    For INS/UPD, corresponding rows in the request table will be set up APPROVED 
+*/
+BEGIN
+NULL;
+END set_app_roles;
 
 END; -- PACKAGE 
 /
