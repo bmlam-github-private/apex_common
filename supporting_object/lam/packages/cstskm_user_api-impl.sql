@@ -6,6 +6,8 @@ AS
    1. compute the hash based for given new usernamne and password to add a new user entry
    2. validates the given password against the username
 */
+err_parent_not_found  EXCEPTION;
+PRAGMA EXCEPTION_INIT(err_parent_not_found,-02291);
 
 FUNCTION audit_user 
 RETURN VARCHAR2
@@ -225,7 +227,7 @@ END request_account;
 
 PROCEDURE request_app_roles
  ( p_user_uniq_name               VARCHAR2                         
-  ,p_target_app                   VARCHAR2                           
+  ,p_target_app                   VARCHAR2        DEFAULT NULL                    
   ,p_role_csv                     VARCHAR2                           
  ) AS 
  /*
@@ -244,7 +246,7 @@ BEGIN
     END;
     FOR rec IN (
         SELECT column_value AS role_name
-        FROM TABLE( RE$NAME_ARRAY (p_role_csv, ',') )
+        FROM TABLE( split_by_string ( p_role_csv, ',') )
     ) LOOP
         BEGIN
             MERGE INTO apex_cstskm_app_role_request z
@@ -256,15 +258,38 @@ BEGIN
             ) q
             ON (  q.user_id = z.user_id
               AND q.app_name = z.app_name
-              AND q.role_name = z.app_name
+              AND q.role_name = z.role_name
             )
+            WHEN NOT MATCHED THEN 
+                INSERT ( created , created_by 
+                    , app_name,     role_name,   user_id 
+                    , status
+                ) VALUES ( sysdate, audit_user()
+                    , q.app_name, q.role_name, q.user_id 
+                    , 'PENDING'
+                )
             WHEN MATCHED THEN 
                 UPDATE 
                 SET updated = sysdate, updated_by = audit_user()
                 WHERE status = 'PENDING'
+            ;
+        EXCEPTION 
+            WHEN err_parent_not_found THEN 
+                pck_std_log.inf( ' MERGE failed on User_id:' ||l_user_id
+                    ||' app:' ||p_target_app
+                    ||' role:' ||rec.role_name
+                    );
+                RAISE_APPLICATION_ERROR( -20001, 'Either the pair of app name and role or the beneficial user is unknown!');
+            WHEN OTHERS THEN 
+                pck_std_log.inf( ' MERGE failed on User_id:' ||l_user_id
+                    ||' app:' ||p_target_app
+                    ||' role:' ||rec.role_name
+                    );
+                pck_std_log.inf ( 'ORA-'||sqlcode||' '||dbms_utility.format_error_stack );
+                RAISE; 
         END;
     END LOOP;
-null;
+    COMMIT;
 END request_app_roles;
 
    
@@ -281,9 +306,124 @@ PROCEDURE set_app_roles
             UPD: replace roles with CSV. If CSV is empty, all roles are removed.     
     For INS/UPD, corresponding rows in the request table will be set up APPROVED 
 */
+    l_user_id apex_cstskm_user.id%TYPE;
 BEGIN
-NULL;
+    pck_std_log.inf ( 'uname: '||p_user_uniq_name ||' app:'||p_target_app ||' csv:'||p_role_csv 
+        );
+    SELECT id
+    INTO l_user_id
+    FROM apex_cstskm_user
+    WHERE user_uniq_name = p_user_uniq_name
+    ;
+    CASE p_role_csv_flag
+    WHEN 'INS'
+    THEN 
+        MERGE INTO apex_cstskm_user_x_app_role z
+        USING (
+            SELECT l_user_id user_id
+                , p_target_app app_name
+                , column_value AS role_name
+            FROM TABLE ( split_by_string (p_role_csv , ',' ) ) 
+            ) q
+        ON ( q.user_id = z.user_id 
+          AND q.app_name = z.app_name 
+          AND q.role_name = z.role_name
+          )
+        WHEN NOT MATCHED  
+        THEN INSERT ( user_id,   app_name,   role_name
+                ,  created_by 
+                )
+            VALUES ( q.user_id,   q.app_name,   q.role_name
+                , audit_user()
+                )
+        ;
+    WHEN 'UPD'
+    THEN 
+        RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
+    WHEN 'DEL'
+    THEN 
+        RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
+    END CASE;
 END set_app_roles;
+
+PROCEDURE process_app_role_requests
+    ( p_req_ids_csv VARCHAR2 
+     ,p_action VARCHAR2 -- GRANT or REJECT 
+    )
+ AS
+    l_distinct_user_x_app NUMBER;
+    l_role_csv VARCHAR2(1000);
+    l_app_name apex_cstskm_user_x_app_role.app_name%TYPE; 
+    l_user_uniq_name apex_cstskm_user.user_uniq_name%TYPE; 
+    l_process_mode  VARCHAR2(10);
+BEGIN   
+    IF upper( p_action ) NOT IN ( 'GRANT', 'REJECT')
+    THEN 
+
+        RAISE_APPLICATION_ERROR( -20001, 'p_action ' ||p_action ||' is invalid');
+    END IF;
+    SELECT COUNT(DISTINCT app_name ||'<#>' || user_id )
+    INTO l_distinct_user_x_app
+    FROM apex_cstskm_app_role_request
+    WHERE id IN ( 
+        SELECT column_value as id 
+        FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
+        )
+        AND status = 'PENDING'
+    ;
+    IF l_distinct_user_x_app > 1 
+    THEN 
+        RAISE_APPLICATION_ERROR ( -20001, 'FOR safety reason this procedure must not process for more than 1 app and 1 user!');
+    END IF; -- check l_distinct_user_x_app
+
+    SELECT listagg( req.role_name, ',') WITHIN GROUP (ORDER BY req.app_name)
+        , req.app_name, u.user_uniq_name
+    INTO l_role_csv
+        , l_app_name, l_user_uniq_name
+    FROM apex_cstskm_app_role_request req 
+    JOIN apex_cstskm_user u ON u.id = req.user_id 
+    WHERE req.id IN ( 
+        SELECT column_value as id 
+        FROM TABLE( split_by_string (p_req_ids_csv, ',')) )
+    GROUP BY   req.app_name, u.user_uniq_name
+    ;
+    l_process_mode :=
+        CASE upper( p_action )
+        WHEN 'GRANT'
+        THEN 'INS'
+        WHEN 'REJECT'
+        THEN 'DEL'
+        END ;
+    set_app_roles
+     ( p_user_uniq_name               => l_user_uniq_name                     
+      ,p_target_app                   => l_app_name                          
+      ,p_role_csv                     => l_role_csv
+      ,p_role_csv_flag                => l_process_mode                   
+     ) ;
+    CASE p_action 
+    WHEN 'GRANT'
+    THEN 
+        UPDATE apex_cstskm_app_role_request 
+        SET status = 'APPROVED'
+        , updated_by = audit_user()   
+        , updated = sysdate
+        WHERE id IN ( 
+            SELECT column_value as id 
+            FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
+            )
+        ;
+    WHEN 'REJECT'
+    THEN 
+        DELETE apex_cstskm_app_role_request 
+        WHERE id IN ( 
+            SELECT column_value as id 
+            FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
+            )
+        ;
+    END CASE;
+    -- delete rows from request table !!! 
+     -- COMMIT; 
+END process_app_role_requests;
 
 END; -- PACKAGE 
 /

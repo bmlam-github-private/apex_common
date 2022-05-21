@@ -3,7 +3,7 @@ CREATE TABLE apex_cstskm_user_x_app_role
   ,user_id NUMBER(10) NOT NULL  REFERENCES apex_cstskm_user(id)
   ,app_name  VARCHAR2(30) NOT NULL 
   ,role_name  VARCHAR2(30) NOT NULL 
-  ,created  DATE NOT NULL 
+  ,created  DATE NOT NULL DEFAULT SYSDATE 
   ,created_by  VARCHAR2(30) NOT NULL 
   ,updated  DATE  NULL 
   ,updated_by  VARCHAR2(30)  NULL 
