@@ -1,6 +1,11 @@
+define pi_user_uniq_name=&1
+
+DECLARE 
+  l_user_uniq_name VARCHAR2(30) := trim( '&pi_user_uniq_name' ) ;
 BEGIN
+  l_user_uniq_name := coalesce( l_user_uniq_name, 'TESTER_'||to_char( sysdate , 'yyyymmdd_hh24mi'));
   cstskm_user_api.add_access 
-( p_user_uniq_name => 'TESTER_'||to_char( sysdate , 'yyyymmdd_hh24mi')
+( p_user_uniq_name => l_user_uniq_name
  ,p_password => 'PASS_'||to_char( sysdate , 'yyyymmdd_hh24mi')
  --,pi_target_app VARCHAR2 NULL 
  --,pi_strict_checks BOOLEAN FALSE -- check for possible dupes, locked account, reactivation etc 

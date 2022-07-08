@@ -1,13 +1,18 @@
+undefine l_test_user
+define l_test_user=&1
+
 DECLARE 
-  l_test_user apex_cstskm_user.user_uniq_name%TYPE;
+  l_test_user apex_cstskm_user.user_uniq_name%TYPE := upper( '&pi_user_uniq_name' ) ;
 BEGIN
-  SELECT user_uniq_name
-  INTO l_test_user
-  FROM apex_cstskm_user
-  WHERE user_uniq_name LIKE 'TESTER_2022%'
-  ORDER BY user_uniq_name 
-  FETCH FIRST 1 ROWS ONLY
-  ;
+  IF trim( l_test_user ) IS NULL THEN 
+    SELECT user_uniq_name
+    INTO l_test_user
+    FROM apex_cstskm_user
+    WHERE user_uniq_name LIKE 'TESTER_2022%'
+    ORDER BY user_uniq_name 
+    FETCH FIRST 1 ROWS ONLY
+    ;
+  END IF;
 
   IF FALSE THEN 
     cstskm_user_api.request_app_roles

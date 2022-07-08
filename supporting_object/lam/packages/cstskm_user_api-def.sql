@@ -66,6 +66,11 @@ PROCEDURE process_app_role_requests
     )
 ;
 
+FUNCTION user_has_role 
+( p_role_name  VARCHAR2 
+) RETURN BOOLEAN
+;
+
 END;
 /
 

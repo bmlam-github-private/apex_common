@@ -142,8 +142,11 @@ begin
     pck_std_log.inf( 'auth_header: '||c_auth_header||' g_user: '||apex_application.g_user
             ||' g_basic_auth_done: '||sys. diutil. bool_to_int(g_basic_auth_done )
         );
+    --return false; 
     if apex_application.g_user <> 'nobody' then
         g_basic_auth_done := TRUE;
+        pck_std_log.inf( ' g_basic_auth_done: '||sys. diutil. bool_to_int(g_basic_auth_done )
+            );
         return true;
     end if;
 
@@ -210,7 +213,9 @@ end my_invalid_session_basic_auth;
 PROCEDURE my_post_logout
 is
 begin
-    pck_std_log.inf( 'User '||v( 'APP_USER') ||' logged out from '||v( 'APP_NAME')||' session '||v( 'APPSESSION'));
+    -- v( 'APPSESSION') is empty when we come here
+    pck_std_log.inf( 'User '||v( 'APP_USER') ||' logged out from '||v( 'APP_NAME')||' session: "'|| wwv_flow.g_instance  ||'"');
+    apex_session.delete_session( ); -- default to v( 'APPSESSION') 
 end my_post_logout;
 
 PROCEDURE request_account
@@ -424,6 +429,23 @@ BEGIN
     -- delete rows from request table !!! 
      -- COMMIT; 
 END process_app_role_requests;
+
+FUNCTION user_has_role 
+( p_role_name  VARCHAR2 
+) RETURN BOOLEAN
+AS 
+    l_count NUMBER;
+BEGIN 
+    SELECT count(1) INTO l_count
+    FROM apex_cstskm_user_x_app_role x
+    JOIN apex_cstskm_user u ON u.user_uniq_name = upper( v('APP_USER') )
+    WHERE x.role_name = p_role_name
+      AND x.app_name = upper( v( 'APP_NAME') )
+      AND u.user_uniq_name <> 'NOBODY'
+    ;
+    RETURN l_count > 0;
+END user_has_role;
+
 
 END; -- PACKAGE 
 /
