@@ -1,7 +1,8 @@
 CREATE OR REPLACE PACKAGE cstskm_user_api
 AS
 
-
+-- following is a prototype procedure to quickly give application access to a new user.
+-- it bypasses the request and approval workflow!
 PROCEDURE add_access 
 ( p_user_uniq_name VARCHAR2
  ,p_password VARCHAR2
@@ -33,10 +34,11 @@ PROCEDURE request_account
 (  p_user_uniq_name               VARCHAR2                         
   ,p_password                     VARCHAR2                          
   ,p_target_app                   VARCHAR2   DEFAULT NULL              
+  ,p_is_new_user                  BOOLEAN    DEFAULT FALSE               
 ) 
 /*
-        This procedure will add a row to the user table in status REQUEST, the same applies to table App-user-role relation. Somewhere there is a lookup table for configured app-specific roles and one of the row will have the flag BASIC. 
-*/
+    Convenience procedure for the "public request access" page. Details see implementation
+    */
 ;
 
 PROCEDURE request_app_roles

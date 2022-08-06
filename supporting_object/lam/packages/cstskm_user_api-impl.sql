@@ -2,6 +2,10 @@ CREATE OR REPLACE PACKAGE BODY cstskm_user_api
 AS
     g_basic_auth_done BOOLEAN;
 
+/* based on a context definition, most routine in this package need to decide if the customer data model applies
+   or should be ignored. For example to request access to an app, in case 1, we need to make sure a row will be 
+   in table apex_cstskm_user. In case 2, we just need to call the APEX APIs
+*/ 
 /* common internal routine which which can both
    1. compute the hash based for given new usernamne and password to add a new user entry
    2. validates the given password against the username
@@ -107,6 +111,7 @@ BEGIN
     ,p_replace_password => FALSE  
     ,po_password_ok  => l_password_ok 
     ) ;
+
 
 END add_access;
 
@@ -221,13 +226,52 @@ end my_post_logout;
 PROCEDURE request_account
 (  p_user_uniq_name               VARCHAR2                         
   ,p_password                     VARCHAR2                          
-  ,p_target_app                   VARCHAR2   DEFAULT NULL              
+  ,p_target_app                   VARCHAR2   DEFAULT NULL          
+  ,p_is_new_user                  BOOLEAN    DEFAULT FALSE               
 ) AS 
 /*
-        This procedure will add a row to the user table in status REQUEST, the same applies to table App-user-role relation. Somewhere there is a lookup table for configured app-specific roles and one of the row will have the flag BASIC. 
+        This procedure will 
+        * if p_is_new_user is TRUE, verify that p_user_uniq_name is new indeed, add a row to APEX_CSTSKM_USER with p_password.
+        * if p_is_new_user is FALSE, verify that p_password is correct.
+        * add a row to the table APEX_CSTSKM_APP_ROLE_REQUEST using the most basic role of the app. This role is looked up from APEX_CSTSKM_APP_ROLE_LKUP
 */
+    l_user_exists NUMBER;
+    l_app_name_used apex_cstskm_app_role_request.app_name%TYPE;
+    l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
 BEGIN
-null;
+    SELECT count(*)
+    INTO l_user_exists
+    FROM apex_cstskm_user
+    WHERE user_uniq_name = p_user_uniq_name
+    ;
+    --RAISE_APPLICATION_ERROR( -20001, $$plsql_unit||':'||$$plsql_line ||' not yet implemented!');
+    IF p_is_new_user 
+    THEN 
+        IF l_user_exists > 0 THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'This user already exists and therefore cannot be created!');
+        END IF;
+    END IF; -- check p_is_new_user 
+
+    l_app_name_used := coalesce( p_target_app, v('APP_NAME'));
+    BEGIN 
+        SELECT role_name
+        INTO l_basic_role
+        FROM apex_cstskm_app_role_lkup
+        WHERE app_name = l_app_name_used
+          AND basic_flg = 'Y'
+        ;
+    EXCEPTION 
+        WHEN no_data_found THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'No basic role has been defined or this app does not exist: "'|| l_app_name_used ||'"');
+    END;
+
+    request_app_roles 
+    ( p_user_uniq_name => p_user_uniq_name
+     ,p_target_app => l_app_name_used
+     ,p_role_csv => l_basic_role
+    );
+
+
 END request_account;
 
 PROCEDURE request_app_roles
