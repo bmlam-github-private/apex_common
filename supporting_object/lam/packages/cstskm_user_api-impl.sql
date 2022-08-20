@@ -13,6 +13,12 @@ AS
 err_parent_not_found  EXCEPTION;
 PRAGMA EXCEPTION_INIT(err_parent_not_found,-02291);
 
+c_auth_method_apex CONSTANT VARCHAR2(10)   := 'APEX';
+c_auth_method_custom CONSTANT VARCHAR2(10) := 'CUSTOM';
+
+g_auth_method VARCHAR2(10) := c_auth_method_apex; -- should be retreived from APEX! 
+
+
 FUNCTION audit_user 
 RETURN VARCHAR2
 AS 
@@ -239,17 +245,39 @@ PROCEDURE request_account
     l_app_name_used apex_cstskm_app_role_request.app_name%TYPE;
     l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
 BEGIN
-    SELECT count(*)
-    INTO l_user_exists
-    FROM apex_cstskm_user
-    WHERE user_uniq_name = p_user_uniq_name
-    ;
+    CASE g_auth_method
+    WHEN c_auth_method_custom THEN
+        SELECT count(*)
+        INTO l_user_exists
+        FROM apex_cstskm_user
+        WHERE user_uniq_name = p_user_uniq_name
+        ;
+    WHEN c_auth_method_apex THEN 
+        SELECT count(1)
+        INTO l_user_exists
+        FROM apex_workspace_apex_users u 
+        WHERE u.user_name = p_user_uniq_name
+        ;
+    END CASE
+        ;
+    pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name||' exists: '|| l_user_exists);
     --RAISE_APPLICATION_ERROR( -20001, $$plsql_unit||':'||$$plsql_line ||' not yet implemented!');
     IF p_is_new_user 
     THEN 
         IF l_user_exists > 0 THEN 
             RAISE_APPLICATION_ERROR( -20001, 'This user already exists and therefore cannot be created!');
         END IF;
+
+        -- Create user account 
+        CASE g_auth_method 
+        WHEN c_auth_method_apex THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'The current Authentication method is '|| g_auth_method
+                ||', new user must be created by the workspace admin!');
+        ELSE 
+            RAISE_APPLICATION_ERROR( -20001, 'Not yet implemented!');
+        END CASE;             
+    ELSE 
+        -- validate password 
     END IF; -- check p_is_new_user 
 
     l_app_name_used := coalesce( p_target_app, v('APP_NAME'));
