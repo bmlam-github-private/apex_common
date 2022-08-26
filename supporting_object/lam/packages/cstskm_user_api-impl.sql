@@ -33,6 +33,8 @@ PROCEDURE check_or_create_credential (
     ,p_replace_password IN BOOLEAN 
     ,po_password_ok     OUT BOOLEAN 
 ) AS
+-- this routine is used internally both for storing a new password or verifying it since
+-- the algorithm to compute the hash value must be identical  
     l_user apex_cstskm_user.user_uniq_name%type := trim( upper(p_user_uniq_name) );
     l_id   apex_cstskm_user.id%type;
     l_hash_computed apex_cstskm_user.hashed%type;
@@ -244,6 +246,7 @@ PROCEDURE request_account
     l_user_exists NUMBER;
     l_app_name_used apex_cstskm_app_role_request.app_name%TYPE;
     l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
+    l_password_ok BOOLEAN;
 BEGIN
     CASE g_auth_method
     WHEN c_auth_method_custom THEN
@@ -259,10 +262,11 @@ BEGIN
         WHERE u.user_name = p_user_uniq_name
         ;
     END CASE
-        ;
+    ;
     pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name||' exists: '|| l_user_exists);
     --RAISE_APPLICATION_ERROR( -20001, $$plsql_unit||':'||$$plsql_line ||' not yet implemented!');
-    IF p_is_new_user 
+    CASE 
+    WHEN p_is_new_user 
     THEN 
         IF l_user_exists > 0 THEN 
             RAISE_APPLICATION_ERROR( -20001, 'This user already exists and therefore cannot be created!');
@@ -276,9 +280,18 @@ BEGIN
         ELSE 
             RAISE_APPLICATION_ERROR( -20001, 'Not yet implemented!');
         END CASE;             
-    ELSE 
+    WHEN NOT p_is_new_user
+    THEN  
         -- validate password 
-    END IF; -- check p_is_new_user 
+        verify_password ( p_user_uniq_name => p_user_uniq_name
+            , p_password => p_password
+            , po_password_ok => l_password_ok
+            );
+        IF NOT l_password_ok 
+        THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!');
+        END IF;
+    END CASE; -- check p_is_new_user 
 
     l_app_name_used := coalesce( p_target_app, v('APP_NAME'));
     BEGIN 
@@ -518,8 +531,24 @@ BEGIN
     RETURN l_count > 0;
 END user_has_role;
 
+PROCEDURE verify_password (
+     p_user_uniq_name IN VARCHAR2
+    ,p_password IN VARCHAR2 
+    ,po_password_ok     OUT BOOLEAN 
+) AS
+BEGIN
+    check_or_create_credential 
+    (p_user_uniq_name => p_user_uniq_name
+    ,p_password => p_password 
+    ,p_create_new => FALSE 
+    ,p_replace_password => FALSE
+    ,po_password_ok     => po_password_ok
+    ); 
+
+END verify_password;
+
 
 END; -- PACKAGE 
 /
 
-SHOW ERRORS 
+--SHOW ERRORS 

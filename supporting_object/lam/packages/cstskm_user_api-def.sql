@@ -73,6 +73,12 @@ FUNCTION user_has_role
 ) RETURN BOOLEAN
 ;
 
+PROCEDURE verify_password (
+     p_user_uniq_name IN VARCHAR2
+    ,p_password IN VARCHAR2 
+    ,po_password_ok     OUT BOOLEAN 
+) ;
+
 END;
 /
 
