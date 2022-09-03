@@ -248,6 +248,7 @@ PROCEDURE request_account
     l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
     l_password_ok BOOLEAN;
 BEGIN
+    pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name||' p_is_new_user:'|| sys. diutil. bool_to_int(p_is_new_user) );
     CASE g_auth_method
     WHEN c_auth_method_custom THEN
         SELECT count(*)
@@ -255,63 +256,78 @@ BEGIN
         FROM apex_cstskm_user
         WHERE user_uniq_name = p_user_uniq_name
         ;
+        pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name||' exists: '|| l_user_exists);
+
+        IF p_is_new_user 
+        THEN
+            IF l_user_exists > 0 THEN 
+                RAISE_APPLICATION_ERROR( -20001, 'This custom-scheme user already exists and therefore cannot be created!');
+            END IF;
+            RAISE_APPLICATION_ERROR( -20001, 'not yet ready at '||$$plsql_unit||':'||$$plsql_line);
+
+        ELSE 
+            IF l_user_exists > 0 THEN 
+                RAISE_APPLICATION_ERROR( -20001, 'This workspace user already exists and therefore cannot be created!');
+            END IF;
+            
+            verify_password ( p_user_uniq_name => p_user_uniq_name
+                , p_password => p_password
+                , po_password_ok => l_password_ok
+                );
+            IF NOT l_password_ok 
+            THEN 
+                RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!');
+            END IF;
+
+            l_app_name_used := coalesce( p_target_app, v('APP_NAME'));
+            BEGIN 
+                SELECT role_name
+                INTO l_basic_role
+                FROM apex_cstskm_app_role_lkup
+                WHERE app_name = l_app_name_used
+                  AND basic_flg = 'Y'
+                ;
+            EXCEPTION 
+                WHEN no_data_found THEN 
+                    RAISE_APPLICATION_ERROR( -20001, 'No basic role has been defined or this app does not exist: "'|| l_app_name_used ||'"');
+            END;
+
+            request_app_roles 
+            ( p_user_uniq_name => p_user_uniq_name
+             ,p_target_app => l_app_name_used
+             ,p_role_csv => l_basic_role
+            );
+
+        END IF; -- p_is_new_user
+
     WHEN c_auth_method_apex THEN 
         SELECT count(1)
         INTO l_user_exists
         FROM apex_workspace_apex_users u 
         WHERE u.user_name = p_user_uniq_name
         ;
-    END CASE
-    ;
-    pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name||' exists: '|| l_user_exists);
-    --RAISE_APPLICATION_ERROR( -20001, $$plsql_unit||':'||$$plsql_line ||' not yet implemented!');
-    CASE 
-    WHEN p_is_new_user 
-    THEN 
-        IF l_user_exists > 0 THEN 
-            RAISE_APPLICATION_ERROR( -20001, 'This user already exists and therefore cannot be created!');
-        END IF;
-
-        -- Create user account 
-        CASE g_auth_method 
-        WHEN c_auth_method_apex THEN 
-            RAISE_APPLICATION_ERROR( -20001, 'The current Authentication method is '|| g_auth_method
-                ||', new user must be created by the workspace admin!');
-        ELSE 
-            RAISE_APPLICATION_ERROR( -20001, 'Not yet implemented!');
-        END CASE;             
-    WHEN NOT p_is_new_user
-    THEN  
-        -- validate password 
-        verify_password ( p_user_uniq_name => p_user_uniq_name
-            , p_password => p_password
-            , po_password_ok => l_password_ok
-            );
-        IF NOT l_password_ok 
+        IF  p_is_new_user 
         THEN 
-            RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!');
-        END IF;
-    END CASE; -- check p_is_new_user 
+            IF l_user_exists > 0 THEN 
+                RAISE_APPLICATION_ERROR( -20001, 'This user already exists and therefore cannot be created!');
+            END IF;
 
-    l_app_name_used := coalesce( p_target_app, v('APP_NAME'));
-    BEGIN 
-        SELECT role_name
-        INTO l_basic_role
-        FROM apex_cstskm_app_role_lkup
-        WHERE app_name = l_app_name_used
-          AND basic_flg = 'Y'
-        ;
-    EXCEPTION 
-        WHEN no_data_found THEN 
-            RAISE_APPLICATION_ERROR( -20001, 'No basic role has been defined or this app does not exist: "'|| l_app_name_used ||'"');
-    END;
-
-    request_app_roles 
-    ( p_user_uniq_name => p_user_uniq_name
-     ,p_target_app => l_app_name_used
-     ,p_role_csv => l_basic_role
-    );
-
+            -- Create user account 
+                RAISE_APPLICATION_ERROR( -20001, 'The current Authentication method is '|| g_auth_method
+                    ||', new user must be created by the workspace admin!');
+        ELSE 
+            l_password_ok := APEX_UTIL.IS_LOGIN_PASSWORD_VALID
+                (  p_username => p_user_uniq_name
+                 , p_password => p_password
+                );
+            IF NOT l_password_ok 
+            THEN 
+                RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!');
+            END IF;
+            RAISE_APPLICATION_ERROR( -20001, 'not yet ready at '||$$plsql_unit||':'||$$plsql_line);
+        END IF; -- p_is_new_user
+    END CASE --g_auth_method
+    ;
 
 END request_account;
 
@@ -551,4 +567,4 @@ END verify_password;
 END; -- PACKAGE 
 /
 
---SHOW ERRORS 
+SHOW ERRORS 
