@@ -248,7 +248,24 @@ PROCEDURE request_account
     l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
     l_password_ok BOOLEAN;
 BEGIN
-    pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name||' p_is_new_user:'|| sys. diutil. bool_to_int(p_is_new_user) );
+    pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name
+        ||' p_is_new_user:'     || sys. diutil. bool_to_int(p_is_new_user)
+        ||' app_name:'     || v( 'APP_NAME')
+     );
+
+    l_app_name_used := coalesce( p_target_app, v('APP_NAME'));
+    BEGIN 
+        SELECT role_name
+        INTO l_basic_role
+        FROM apex_cstskm_app_role_lkup
+        WHERE app_name = l_app_name_used
+          AND basic_flg = 'Y'
+        ;
+    EXCEPTION 
+        WHEN no_data_found THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'No basic role has been defined or this app does not exist: "'|| l_app_name_used ||'"');
+    END;
+    
     CASE g_auth_method
     WHEN c_auth_method_custom THEN
         SELECT count(*)
@@ -279,18 +296,6 @@ BEGIN
                 RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!');
             END IF;
 
-            l_app_name_used := coalesce( p_target_app, v('APP_NAME'));
-            BEGIN 
-                SELECT role_name
-                INTO l_basic_role
-                FROM apex_cstskm_app_role_lkup
-                WHERE app_name = l_app_name_used
-                  AND basic_flg = 'Y'
-                ;
-            EXCEPTION 
-                WHEN no_data_found THEN 
-                    RAISE_APPLICATION_ERROR( -20001, 'No basic role has been defined or this app does not exist: "'|| l_app_name_used ||'"');
-            END;
 
             request_app_roles 
             ( p_user_uniq_name => p_user_uniq_name
@@ -317,14 +322,20 @@ BEGIN
                     ||', new user must be created by the workspace admin!');
         ELSE 
             l_password_ok := APEX_UTIL.IS_LOGIN_PASSWORD_VALID
-                (  p_username => p_user_uniq_name
+                (  p_username => upper(p_user_uniq_name) -- APEX workspace username is case-insensitive! 
                  , p_password => p_password
                 );
             IF NOT l_password_ok 
             THEN 
                 RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!');
             END IF;
-            RAISE_APPLICATION_ERROR( -20001, 'not yet ready at '||$$plsql_unit||':'||$$plsql_line);
+--            RAISE_APPLICATION_ERROR( -20001, 'not yet ready at '||$$plsql_unit||':'||$$plsql_line);
+
+            request_app_roles
+             ( p_user_uniq_name =>   p_user_uniq_name               
+              --,p_target_app =>        DEFAULT NULL                    
+              ,p_role_csv =>    l_basic_role                       
+             ) ;
         END IF; -- p_is_new_user
     END CASE --g_auth_method
     ;
@@ -358,7 +369,7 @@ BEGIN
             MERGE INTO apex_cstskm_app_role_request z
             USING (
                 SELECT rec.role_name AS role_name
-                    , p_target_app AS app_name
+                    , coalesce (p_target_app, v('APP_NAME') ) AS app_name
                     , l_user_id AS user_id
                 FROM dual
             ) q
