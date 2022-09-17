@@ -245,21 +245,25 @@ PROCEDURE request_account
 */
     l_user_exists NUMBER;
     l_app_name_used apex_cstskm_app_role_request.app_name%TYPE;
+    l_user_name_used VARCHAR2(100);
     l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
     l_password_ok BOOLEAN;
 BEGIN
-    pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name
+    l_user_name_used := upper( p_user_uniq_name );
+    l_app_name_used := upper( coalesce( p_target_app, v('APP_NAME')) );
+    pck_std_log.inf( 'p_user_uniq_name:'|| p_user_uniq_name
         ||' p_is_new_user:'     || sys. diutil. bool_to_int(p_is_new_user)
         ||' app_name:'     || v( 'APP_NAME')
+        ||' app name used:'     || l_app_name_used
+        ||' user name used:'     || l_user_name_used  
      );
 
-    l_app_name_used := coalesce( p_target_app, v('APP_NAME'));
     BEGIN 
         SELECT role_name
         INTO l_basic_role
         FROM apex_cstskm_app_role_lkup
-        WHERE app_name = l_app_name_used
-          AND basic_flg = 'Y'
+        WHERE app_name =  l_app_name_used
+          AND basic_flg = 'YES'
         ;
     EXCEPTION 
         WHEN no_data_found THEN 
@@ -271,9 +275,9 @@ BEGIN
         SELECT count(*)
         INTO l_user_exists
         FROM apex_cstskm_user
-        WHERE user_uniq_name = p_user_uniq_name
+        WHERE user_uniq_name = l_user_name_used
         ;
-        pck_std_log.inf( 'user_uniq_name:'|| p_user_uniq_name||' exists: '|| l_user_exists);
+        pck_std_log.inf( 'user_uniq_name:'|| l_user_name_used||' exists: '|| l_user_exists);
 
         IF p_is_new_user 
         THEN
@@ -287,18 +291,17 @@ BEGIN
                 RAISE_APPLICATION_ERROR( -20001, 'This workspace user already exists and therefore cannot be created!');
             END IF;
             
-            verify_password ( p_user_uniq_name => p_user_uniq_name
+            verify_password ( p_user_uniq_name => l_user_name_used
                 , p_password => p_password
                 , po_password_ok => l_password_ok
                 );
             IF NOT l_password_ok 
             THEN 
-                RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!');
+                RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!'||$$plsql_unit||':'||$$plsql_line);
             END IF;
 
-
             request_app_roles 
-            ( p_user_uniq_name => p_user_uniq_name
+            ( p_user_uniq_name => l_user_name_used
              ,p_target_app => l_app_name_used
              ,p_role_csv => l_basic_role
             );
@@ -309,7 +312,7 @@ BEGIN
         SELECT count(1)
         INTO l_user_exists
         FROM apex_workspace_apex_users u 
-        WHERE u.user_name = p_user_uniq_name
+        WHERE u.user_name = l_user_name_used 
         ;
         IF  p_is_new_user 
         THEN 
@@ -322,17 +325,17 @@ BEGIN
                     ||', new user must be created by the workspace admin!');
         ELSE 
             l_password_ok := APEX_UTIL.IS_LOGIN_PASSWORD_VALID
-                (  p_username => upper(p_user_uniq_name) -- APEX workspace username is case-insensitive! 
+                (  p_username => l_user_name_used -- APEX workspace username is case-insensitive! 
                  , p_password => p_password
                 );
             IF NOT l_password_ok 
             THEN 
-                RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!');
+                RAISE_APPLICATION_ERROR( -20001, 'Incorrect username or password!'||$$plsql_unit||':'||$$plsql_line);
             END IF;
 --            RAISE_APPLICATION_ERROR( -20001, 'not yet ready at '||$$plsql_unit||':'||$$plsql_line);
 
             request_app_roles
-             ( p_user_uniq_name =>   p_user_uniq_name               
+             ( p_user_uniq_name =>   l_user_name_used               
               --,p_target_app =>        DEFAULT NULL                    
               ,p_role_csv =>    l_basic_role                       
              ) ;
@@ -351,52 +354,89 @@ PROCEDURE request_app_roles
         This procedure will  add rows in the request table for App-user-role relation in PENDING status 
 */
     l_user_id apex_cstskm_user.id%TYPE;
+    l_app_name_used apex_cstskm_app_role_request.app_name%TYPE := upper( coalesce( p_target_app, v('APP_NAME')) );
 BEGIN
-    BEGIN
-        SELECT id INTO l_user_id 
-        FROM apex_cstskm_user
-        WHERE user_uniq_name = p_user_uniq_name
-        ;
-    EXCEPTION 
-            WHEN no_data_found THEN 
-                RAISE_APPLICATION_ERROR( -20001, 'User '||p_user_uniq_name||' not found in customer user table!' );
-    END;
+    IF g_auth_method = c_auth_method_custom THEN
+        BEGIN
+            SELECT id INTO l_user_id 
+            FROM apex_cstskm_user
+            WHERE user_uniq_name = p_user_uniq_name
+            ;
+        EXCEPTION 
+                WHEN no_data_found THEN 
+                    RAISE_APPLICATION_ERROR( -20001, 'User '||p_user_uniq_name||' not found in customer user table!' );
+        END;
+    END IF;
+
+    pck_std_log.inf( ' MERGE using User_id:' ||l_user_id ||' roles:' ||p_role_csv );
     FOR rec IN (
         SELECT column_value AS role_name
         FROM TABLE( split_by_string ( p_role_csv, ',') )
     ) LOOP
         BEGIN
-            MERGE INTO apex_cstskm_app_role_request z
-            USING (
-                SELECT rec.role_name AS role_name
-                    , coalesce (p_target_app, v('APP_NAME') ) AS app_name
-                    , l_user_id AS user_id
-                FROM dual
-            ) q
-            ON (  q.user_id = z.user_id
-              AND q.app_name = z.app_name
-              AND q.role_name = z.role_name
-            )
-            WHEN NOT MATCHED THEN 
-                INSERT ( created , created_by 
-                    , app_name,     role_name,   user_id 
-                    , status
-                ) VALUES ( sysdate, audit_user()
-                    , q.app_name, q.role_name, q.user_id 
-                    , 'PENDING'
+            CASE 
+            WHEN g_auth_method = c_auth_method_apex
+            THEN 
+                MERGE INTO apex_wkspauth_app_role_request z
+                USING (
+                    SELECT rec.role_name AS role_name
+                        , l_app_name_used AS app_name
+                        , p_user_uniq_name AS apex_user_name 
+                    FROM dual
+                ) q
+                ON (  q.apex_user_name = z.apex_user_name
+                  AND q.app_name = z.app_name
+                  AND q.role_name = z.role_name
                 )
-            WHEN MATCHED THEN 
-                UPDATE 
-                SET updated = sysdate, updated_by = audit_user()
-                WHERE status = 'PENDING'
-            ;
+                WHEN NOT MATCHED THEN 
+                    INSERT ( created , created_by 
+                        , app_name,     role_name,   apex_user_name 
+                        , status
+                    ) VALUES ( sysdate, audit_user()
+                        , q.app_name, q.role_name, q.apex_user_name  
+                        , 'PENDING'
+                    )
+                WHEN MATCHED THEN 
+                    UPDATE 
+                    SET updated = sysdate, updated_by = audit_user()
+                    WHERE status = 'PENDING'
+                ;
+            WHEN g_auth_method = c_auth_method_custom 
+            THEN 
+                MERGE INTO apex_cstskm_app_role_request z
+                USING (
+                    SELECT rec.role_name AS role_name
+                        , l_app_name_used AS app_name
+                        , l_user_id AS user_id
+                    FROM dual
+                ) q
+                ON (  q.user_id = z.user_id
+                  AND q.app_name = z.app_name
+                  AND q.role_name = z.role_name
+                )
+                WHEN NOT MATCHED THEN 
+                    INSERT ( created , created_by 
+                        , app_name,     role_name,   user_id 
+                        , status
+                    ) VALUES ( sysdate, audit_user()
+                        , q.app_name, q.role_name, q.user_id 
+                        , 'PENDING'
+                    )
+                WHEN MATCHED THEN 
+                    UPDATE 
+                    SET updated = sysdate, updated_by = audit_user()
+                    WHERE status = 'PENDING'
+                ;
+            END CASE;
         EXCEPTION 
+        /*
             WHEN err_parent_not_found THEN 
                 pck_std_log.inf( ' MERGE failed on User_id:' ||l_user_id
                     ||' app:' ||p_target_app
                     ||' role:' ||rec.role_name
                     );
                 RAISE_APPLICATION_ERROR( -20001, 'Either the pair of app name and role or the beneficial user is unknown!');
+                */ 
             WHEN OTHERS THEN 
                 pck_std_log.inf( ' MERGE failed on User_id:' ||l_user_id
                     ||' app:' ||p_target_app
