@@ -68,6 +68,7 @@ RETURN VARCHAR2;
 PROCEDURE process_app_role_requests
     ( p_req_ids_csv VARCHAR2 
      ,p_action VARCHAR2 -- GRANT or REJECT 
+     ,p_req_source VARCHAR2 
     )
 ;
 

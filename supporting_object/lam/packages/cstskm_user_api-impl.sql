@@ -455,6 +455,7 @@ PROCEDURE set_app_roles
   ,p_target_app                   VARCHAR2                           
   ,p_role_csv                     VARCHAR2     
   ,p_role_csv_flag                VARCHAR2                       
+  ,p_auth                         VARCHAR2                       
  ) AS 
  /*
         the Flag has these meanings 
@@ -467,45 +468,79 @@ PROCEDURE set_app_roles
 BEGIN
     pck_std_log.inf ( 'uname: '||p_user_uniq_name ||' app:'||p_target_app ||' csv:'||p_role_csv 
         );
-    SELECT id
-    INTO l_user_id
-    FROM apex_cstskm_user
-    WHERE user_uniq_name = p_user_uniq_name
-    ;
-    CASE p_role_csv_flag
-    WHEN 'INS'
+    CASE p_auth
+    WHEN 'APEX'
     THEN 
-        MERGE INTO apex_cstskm_user_x_app_role z
-        USING (
-            SELECT l_user_id user_id
-                , p_target_app app_name
-                , column_value AS role_name
-            FROM TABLE ( split_by_string (p_role_csv , ',' ) ) 
-            ) q
-        ON ( q.user_id = z.user_id 
-          AND q.app_name = z.app_name 
-          AND q.role_name = z.role_name
-          )
-        WHEN NOT MATCHED  
-        THEN INSERT ( user_id,   app_name,   role_name
-                ,  created_by 
-                )
-            VALUES ( q.user_id,   q.app_name,   q.role_name
-                , audit_user()
-                )
+        SELECT DISTINCT application_id
+        INTO l_apex_app_num
+        FROM APEX_APPL_ACL_USER_ROLES -- we should replace this view with something more consolidated
+        WHERE upper( application_name = p_target_app )
         ;
-    WHEN 'UPD'
+        CASE p_role_csv_flag
+        WHEN 'INS'
+        THEN 
+            -- here we need to call APEX USER API methods 
+            -- for now no check if the call is indeed necessary
+            FOR lr IN (                    
+                SELECT column_value AS role_name
+                FROM TABLE ( split_by_string (p_role_csv , ',' ) ) 
+            ) LOOP 
+                apex_acl.add_user_role
+                ( p_application_id => l_apex_app_num
+                 ,p_user_name => p_user_uniq_name
+                 ,p_role_static_id => lr.role_name
+                );
+            END LOOP;
+        WHEN 'UPD'
+        THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
+        WHEN 'DEL'
+        THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
+        END CASE; -- action
+    WHEN 'CUSTOM'
     THEN 
-        RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
-    WHEN 'DEL'
-    THEN 
-        RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
-    END CASE;
+        SELECT id
+        INTO l_user_id
+        FROM apex_cstskm_user
+        WHERE user_uniq_name = p_user_uniq_name
+        ;
+        CASE p_role_csv_flag
+        WHEN 'INS'
+        THEN 
+            MERGE INTO apex_cstskm_user_x_app_role z
+            USING (
+                SELECT l_user_id user_id
+                    , p_target_app app_name
+                    , column_value AS role_name
+                FROM TABLE ( split_by_string (p_role_csv , ',' ) ) 
+                ) q
+            ON ( q.user_id = z.user_id 
+              AND q.app_name = z.app_name 
+              AND q.role_name = z.role_name
+              )
+            WHEN NOT MATCHED  
+            THEN INSERT ( user_id,   app_name,   role_name
+                    ,  created_by 
+                    )
+                VALUES ( q.user_id,   q.app_name,   q.role_name
+                    , audit_user()
+                    )
+            ;
+        WHEN 'UPD'
+        THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
+        WHEN 'DEL'
+        THEN 
+            RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
+        END CASE; -- action
+    END CASE; -- authentication 
 END set_app_roles;
 
 PROCEDURE process_app_role_requests
     ( p_req_ids_csv VARCHAR2 
      ,p_action VARCHAR2 -- GRANT or REJECT 
+     ,p_req_source VARCHAR2 
     )
  AS
     l_distinct_user_x_app NUMBER;
@@ -519,6 +554,7 @@ BEGIN
 
         RAISE_APPLICATION_ERROR( -20001, 'p_action ' ||p_action ||' is invalid');
     END IF;
+
     SELECT COUNT(DISTINCT app_name ||'<#>' || user_id )
     INTO l_distinct_user_x_app
     FROM apex_cstskm_app_role_request
@@ -534,15 +570,15 @@ BEGIN
     END IF; -- check l_distinct_user_x_app
 
     SELECT listagg( req.role_name, ',') WITHIN GROUP (ORDER BY req.app_name)
-        , req.app_name, u.user_uniq_name
+        , req.app_name, req.user_name
     INTO l_role_csv
         , l_app_name, l_user_uniq_name
-    FROM apex_cstskm_app_role_request req 
-    JOIN apex_cstskm_user u ON u.id = req.user_id 
-    WHERE req.id IN ( 
+    FROM v_app_role_request_union_all req
+    WHERE req.req_id IN ( 
         SELECT column_value as id 
         FROM TABLE( split_by_string (p_req_ids_csv, ',')) )
-    GROUP BY   req.app_name, u.user_uniq_name
+      AND req_source = p_req_source
+    GROUP BY   req.app_name, req.user_name
     ;
     l_process_mode :=
         CASE upper( p_action )

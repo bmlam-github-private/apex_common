@@ -1,8 +1,10 @@
 CREATE OR REPLACE VIEW v_app_role_request_union_all AS 
 SELECT 
 	'?' req_source
+	, 0 AS req_id
 	,'?' app_name      
 	,'?' user_name     
+	,'?' role_name     
 	,'?' status        
 	,sysdate created       
 	,'?' created_by    
@@ -12,8 +14,10 @@ FROM dual WHERE 1=0
 UNION ALL 
 SELECT 
 	'CSTSKM'
+	,req_id 
 	 , app_name      
 	,  user_uniq_name     
+	, role_name 
 	,  req_status        
 	, req_created       
 	,  req_created_by    
@@ -24,8 +28,10 @@ WHERE 1=1
 UNION ALL 
 SELECT 
 	'APEX'
+	,id 
 	 ,	app_name      
 	,  apex_user_name     
+	, role_name 
 	,  status        
 	, created       
 	,  created_by    

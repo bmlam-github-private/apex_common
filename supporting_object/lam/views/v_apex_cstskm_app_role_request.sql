@@ -1,7 +1,8 @@
 CREATE OR REPLACE VIEW v_apex_cstskm_app_role_request
 AS
 SELECT 
-	u.id user_id 
+	req.id req_id
+	,u.id user_id 
 	,u.user_uniq_name
 	,req.app_name
 	,req.role_name
