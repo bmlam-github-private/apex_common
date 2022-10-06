@@ -16,6 +16,8 @@ PRAGMA EXCEPTION_INIT(err_parent_not_found,-02291);
 c_auth_method_apex CONSTANT VARCHAR2(10)   := 'APEX';
 c_auth_method_custom CONSTANT VARCHAR2(10) := 'CUSTOM';
 
+c_fixed_workspace CONSTANT VARCHAR2(10) := 'LAM';
+
 g_auth_method VARCHAR2(10) := c_auth_method_apex; -- should be retreived from APEX! 
 
 
@@ -465,17 +467,25 @@ PROCEDURE set_app_roles
     For INS/UPD, corresponding rows in the request table will be set up APPROVED 
 */
     l_user_id apex_cstskm_user.id%TYPE;
+    l_apex_app_num NUMBER;
 BEGIN
     pck_std_log.inf ( 'uname: '||p_user_uniq_name ||' app:'||p_target_app ||' csv:'||p_role_csv 
         );
     CASE p_auth
     WHEN 'APEX'
     THEN 
-        SELECT DISTINCT application_id
+        SELECT 
+            ( SELECT DISTINCT application_id
+                FROM apex_applications
+                WHERE upper( application_name ) = p_target_app 
+            )
         INTO l_apex_app_num
-        FROM APEX_APPL_ACL_USER_ROLES -- we should replace this view with something more consolidated
-        WHERE upper( application_name = p_target_app )
+            FROM dual 
         ;
+        IF l_apex_app_num IS NULL 
+        THEN 
+            RAISE_APPLICATION_ERROR( -20001, $$plsql_unit||': '||$$plsql_line ||'application_id could not be found!');
+        END IF; 
         CASE p_role_csv_flag
         WHEN 'INS'
         THEN 
@@ -485,6 +495,7 @@ BEGIN
                 SELECT column_value AS role_name
                 FROM TABLE ( split_by_string (p_role_csv , ',' ) ) 
             ) LOOP 
+                pck_std_log.inf ( 'l_apex_app_num: '||l_apex_app_num ||' role_name:'||lr.role_name          );
                 apex_acl.add_user_role
                 ( p_application_id => l_apex_app_num
                  ,p_user_name => p_user_uniq_name
@@ -535,6 +546,10 @@ BEGIN
             RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
         END CASE; -- action
     END CASE; -- authentication 
+EXCEPTION 
+    WHEN OTHERS THEN 
+        pck_std_log.err( a_errno=> sqlcode, a_text=> substr( sqlerrm ||' '|| 'uname: '||p_user_uniq_name ||' app:'||p_target_app ||' csv:'||p_role_csv, 1, 1000) );
+        RAISE;
 END set_app_roles;
 
 PROCEDURE process_app_role_requests
@@ -545,8 +560,8 @@ PROCEDURE process_app_role_requests
  AS
     l_distinct_user_x_app NUMBER;
     l_role_csv VARCHAR2(1000);
-    l_app_name apex_cstskm_user_x_app_role.app_name%TYPE; 
-    l_user_uniq_name apex_cstskm_user.user_uniq_name%TYPE; 
+    l_app_name v_app_role_request_union_all.app_name%TYPE; 
+    l_user_uniq_name v_app_role_request_union_all.user_name%TYPE; 
     l_process_mode  VARCHAR2(10);
 BEGIN   
     IF upper( p_action ) NOT IN ( 'GRANT', 'REJECT')
@@ -555,19 +570,25 @@ BEGIN
         RAISE_APPLICATION_ERROR( -20001, 'p_action ' ||p_action ||' is invalid');
     END IF;
 
-    SELECT COUNT(DISTINCT app_name ||'<#>' || user_id )
+    SELECT COUNT(DISTINCT app_name ||'<#>' || user_name )
     INTO l_distinct_user_x_app
-    FROM apex_cstskm_app_role_request
-    WHERE id IN ( 
+    FROM v_app_role_request_union_all
+    WHERE req_id IN ( 
         SELECT column_value as id 
         FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
         )
-        AND status = 'PENDING'
+      AND req_source = p_req_source
+      AND status = 'PENDING'
     ;
-    IF l_distinct_user_x_app > 1 
+    CASE 
+    WHEN l_distinct_user_x_app = 0
+    THEN 
+        RAISE_APPLICATION_ERROR ( -20001, 'It seems the request_id values are either non-existing or have improper status for this processing!');
+    WHEN l_distinct_user_x_app > 1 
     THEN 
         RAISE_APPLICATION_ERROR ( -20001, 'FOR safety reason this procedure must not process for more than 1 app and 1 user!');
-    END IF; -- check l_distinct_user_x_app
+    ELSE NULL;
+    END CASE; -- check l_distinct_user_x_app
 
     SELECT listagg( req.role_name, ',') WITHIN GROUP (ORDER BY req.app_name)
         , req.app_name, req.user_name
@@ -578,44 +599,53 @@ BEGIN
         SELECT column_value as id 
         FROM TABLE( split_by_string (p_req_ids_csv, ',')) )
       AND req_source = p_req_source
+      AND status = 'PENDING'
     GROUP BY   req.app_name, req.user_name
     ;
-    l_process_mode :=
-        CASE upper( p_action )
-        WHEN 'GRANT'
-        THEN 'INS'
-        WHEN 'REJECT'
-        THEN 'DEL'
-        END ;
-    set_app_roles
-     ( p_user_uniq_name               => l_user_uniq_name                     
-      ,p_target_app                   => l_app_name                          
-      ,p_role_csv                     => l_role_csv
-      ,p_role_csv_flag                => l_process_mode                   
-     ) ;
+    -- For auth mode APEX and CUSTOM , the approval translates to INS
+    --                                 for reject, we are not sure yet if we should revoke the "access" when it DOES exist 
     CASE p_action 
-    WHEN 'GRANT'
+    WHEN 'GRANT' THEN 
+        set_app_roles
+         ( p_user_uniq_name               => l_user_uniq_name                     
+          ,p_target_app                   => l_app_name                          
+          ,p_role_csv                     => l_role_csv
+          ,p_role_csv_flag                => 'INS'                   
+          ,p_auth                => p_req_source                   
+         ) ;
+    ELSE NULL;
+    END CASE; -- p_action 
+    CASE p_req_source
+    WHEN c_auth_method_apex
     THEN 
-        UPDATE apex_cstskm_app_role_request 
-        SET status = 'APPROVED'
-        , updated_by = audit_user()   
-        , updated = sysdate
-        WHERE id IN ( 
-            SELECT column_value as id 
-            FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
-            )
-        ;
-    WHEN 'REJECT'
+            UPDATE apex_wkspauth_app_role_request 
+            SET status = CASE p_action 
+                        WHEN 'GRANT' THEN 'APPROVED'
+                        WHEN 'REJECT' THEN 'REJECTED'
+                        END
+            , updated_by = audit_user()   
+            , updated = sysdate
+            WHERE id IN ( 
+                SELECT column_value as id 
+                FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
+                )
+            ;
+    WHEN c_auth_method_custom
     THEN 
-        DELETE apex_cstskm_app_role_request 
-        WHERE id IN ( 
-            SELECT column_value as id 
-            FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
-            )
-        ;
-    END CASE;
-    -- delete rows from request table !!! 
-     -- COMMIT; 
+            UPDATE apex_cstskm_app_role_request 
+            SET status = CASE p_action 
+                        WHEN 'GRANT' THEN 'APPROVED'
+                        WHEN 'REJECT' THEN 'REJECTED'
+                        END
+            , updated_by = audit_user()   
+            , updated = sysdate
+            WHERE id IN ( 
+                SELECT column_value as id 
+                FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
+                )
+            ;
+    END CASE; -- auth  
+    -- COMMIT; 
 END process_app_role_requests;
 
 FUNCTION user_has_role 
@@ -650,6 +680,15 @@ BEGIN
 
 END verify_password;
 
+PROCEDURE init 
+AS 
+BEGIN 
+    NULL; -- just run package body code 
+    dbms_output.put_line( $$plsql_unit||':'||$$plsql_line );
+END init;
+
+BEGIN 
+    apex_util.set_workspace( c_fixed_workspace );
 
 END; -- PACKAGE 
 /

@@ -13,7 +13,7 @@ SELECT
 FROM dual WHERE 1=0
 UNION ALL 
 SELECT 
-	'CSTSKM'
+	'CUSTOM'
 	,req_id 
 	 , app_name      
 	,  user_uniq_name     

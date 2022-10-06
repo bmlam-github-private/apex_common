@@ -56,7 +56,8 @@ PROCEDURE set_app_roles
  ( p_user_uniq_name               VARCHAR2                         
   ,p_target_app                   VARCHAR2                           
   ,p_role_csv                     VARCHAR2     
-  ,p_role_csv_flag                VARCHAR2                       
+  ,p_role_csv_flag                VARCHAR2    
+  ,p_auth                         VARCHAR2                   
  ) 
  ;
 
@@ -84,6 +85,8 @@ PROCEDURE verify_password (
     ,p_password IN VARCHAR2 
     ,po_password_ok     OUT BOOLEAN 
 ) ;
+
+PROCEDURE init;
 
 END;
 /
