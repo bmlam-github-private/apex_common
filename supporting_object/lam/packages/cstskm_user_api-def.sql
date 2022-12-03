@@ -48,7 +48,8 @@ PROCEDURE request_account
 PROCEDURE request_app_roles
  ( p_user_uniq_name               VARCHAR2                         
   ,p_target_app                   VARCHAR2        DEFAULT NULL                    
-  ,p_role_csv                     VARCHAR2                           
+  ,p_role_csv                     VARCHAR2 
+  ,p_action                       VARCHAR2        DEFAULT 'GRANT'                 
  ) 
  ;
 
@@ -87,6 +88,16 @@ PROCEDURE verify_password (
 ) ;
 
 PROCEDURE init;
+
+PROCEDURE submit_app_role_requests_by_json 
+( p_app_name VARCHAR2 DEFAULT NULL 
+ ,p_json     VARCHAR2
+) ;
+
+PROCEDURE process_app_role_requests_by_json
+( p_app_name VARCHAR2 DEFAULT NULL 
+ ,p_json     VARCHAR2
+) ; 
 
 END;
 /

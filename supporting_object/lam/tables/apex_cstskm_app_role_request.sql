@@ -18,3 +18,7 @@ CREATE TABLE apex_cstskm_app_role_request
 COMMENT ON TABLE apex_cstskm_app_role_request IS 
 'A kind of request history. There shall be a clean up job to remove old rows'
 ;
+
+
+ALTER TABLE apex_cstskm_app_role_request ADD ( action VARCHAR2(10) DEFAULT 'GRANT')
+;

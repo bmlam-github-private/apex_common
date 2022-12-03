@@ -11,6 +11,7 @@ SELECT
 	,req.created_by req_created_by
 	,req.updated req_updated
 	,req.updated_by req_updated_by
+	,req.action req_action 
 FROM apex_cstskm_app_role_request req 
 JOIN apex_cstskm_user u ON u.id = req.user_id
 ;

@@ -10,6 +10,7 @@ SELECT
 	,'?' created_by    
 	,sysdate updated       
 	,'?' updated_by
+	,'?' req_action 
 FROM dual WHERE 1=0
 UNION ALL 
 SELECT 
@@ -22,7 +23,8 @@ SELECT
 	, req_created       
 	,  req_created_by    
 	, req_updated       
-	,  req_updated_by
+	, req_updated_by
+	, req_action
 FROM v_apex_cstskm_app_role_request 
 WHERE 1=1
 UNION ALL 
@@ -37,6 +39,7 @@ SELECT
 	,  created_by    
 	, updated       
 	,  updated_by
+	, action 
 FROM apex_wkspauth_app_role_request 
 WHERE 1=1
 ;

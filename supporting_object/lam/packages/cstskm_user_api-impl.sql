@@ -20,6 +20,22 @@ c_fixed_workspace CONSTANT VARCHAR2(10) := 'LAM';
 
 g_auth_method VARCHAR2(10) := c_auth_method_apex; -- should be retreived from APEX! 
 
+PROCEDURE oops( p_line NUMBER ) AS BEGIN RAISE_APPLICATION_ERROR( -20001, 'oops called from line '||p_line|| ' of '||$$plsql_unit ) ;
+END oops
+;
+PROCEDURE apex_auth_app_role_action
+( p_user_uniq_name                VARCHAR2                         
+  ,p_target_app                   VARCHAR2                           
+  ,p_role                         VARCHAR2     
+  ,p_action                       VARCHAR2                       
+) ; 
+
+PROCEDURE cst_auth_app_role_action
+( p_user_id                       NUMBER
+  ,p_target_app                   VARCHAR2                           
+  ,p_role                         VARCHAR2     
+  ,p_action                       VARCHAR2                       
+);
 
 FUNCTION audit_user 
 RETURN VARCHAR2
@@ -351,6 +367,7 @@ PROCEDURE request_app_roles
  ( p_user_uniq_name               VARCHAR2                         
   ,p_target_app                   VARCHAR2        DEFAULT NULL                    
   ,p_role_csv                     VARCHAR2                           
+  ,p_action                       VARCHAR2        DEFAULT 'GRANT'                 
  ) AS 
  /*
         This procedure will  add rows in the request table for App-user-role relation in PENDING status 
@@ -370,7 +387,7 @@ BEGIN
         END;
     END IF;
 
-    pck_std_log.inf( ' MERGE using User_id:' ||l_user_id ||' roles:' ||p_role_csv );
+    pck_std_log.inf( ' MERGE using User_id:' ||l_user_id ||' roles:' ||p_role_csv ||' action:' ||p_action );
     FOR rec IN (
         SELECT column_value AS role_name
         FROM TABLE( split_by_string ( p_role_csv, ',') )
@@ -393,14 +410,15 @@ BEGIN
                 WHEN NOT MATCHED THEN 
                     INSERT ( created , created_by 
                         , app_name,     role_name,   apex_user_name 
-                        , status
+                        , status, action 
                     ) VALUES ( sysdate, audit_user()
                         , q.app_name, q.role_name, q.apex_user_name  
-                        , 'PENDING'
+                        , 'PENDING', p_action
                     )
                 WHEN MATCHED THEN 
                     UPDATE 
                     SET updated = sysdate, updated_by = audit_user()
+                        , action = p_action
                     WHERE status = 'PENDING'
                 ;
             WHEN g_auth_method = c_auth_method_custom 
@@ -419,10 +437,10 @@ BEGIN
                 WHEN NOT MATCHED THEN 
                     INSERT ( created , created_by 
                         , app_name,     role_name,   user_id 
-                        , status
+                        , status, action 
                     ) VALUES ( sysdate, audit_user()
                         , q.app_name, q.role_name, q.user_id 
-                        , 'PENDING'
+                        , 'PENDING', p_action
                     )
                 WHEN MATCHED THEN 
                     UPDATE 
@@ -452,7 +470,7 @@ BEGIN
 END request_app_roles;
 
    
-PROCEDURE set_app_roles
+PROCEDURE set_app_roles -- this procedure is being phased out! replacements are the more granular/atomic procedures 
  ( p_user_uniq_name               VARCHAR2                         
   ,p_target_app                   VARCHAR2                           
   ,p_role_csv                     VARCHAR2     
@@ -516,15 +534,60 @@ BEGIN
         FROM apex_cstskm_user
         WHERE user_uniq_name = p_user_uniq_name
         ;
-        CASE p_role_csv_flag
+
+        FOR lr IN (                    
+            SELECT column_value AS role_name
+            FROM TABLE ( split_by_string (p_role_csv , ',' ) ) 
+        ) LOOP 
+            pck_std_log.inf ( 'l_apex_app_num: '||l_apex_app_num ||' role_name:'||lr.role_name          );
+            cst_auth_app_role_action
+                ( p_user_id  => l_user_id
+                 ,p_target_app => p_target_app
+                 ,p_role =>  lr.role_name
+                 ,p_action => p_role_csv_flag 
+                );
+        END LOOP;
+
+
+    END CASE; -- authentication 
+EXCEPTION 
+    WHEN OTHERS THEN 
+        pck_std_log.err( a_errno=> sqlcode, a_text=> substr( sqlerrm ||' '|| 'uname: '||p_user_uniq_name ||' app:'||p_target_app ||' csv:'||p_role_csv, 1, 1000) );
+        RAISE;
+END set_app_roles;
+
+/* Grant or Revoke an ACL user-role
+*/
+PROCEDURE apex_auth_app_role_action
+( p_user_uniq_name                VARCHAR2                         
+  ,p_target_app                   VARCHAR2                           
+  ,p_role                         VARCHAR2     
+  ,p_action                       VARCHAR2                       
+) AS 
+BEGIN 
+null;
+END apex_auth_app_role_action;
+
+/* Insert or delete a user-x-app_role entry 
+*/
+PROCEDURE cst_auth_app_role_action
+( p_user_id                       NUMBER                          
+  ,p_target_app                   VARCHAR2                           
+  ,p_role                         VARCHAR2     
+  ,p_action                       VARCHAR2                       
+
+) AS 
+BEGIN 
+
+        CASE p_action
         WHEN 'INS'
         THEN 
             MERGE INTO apex_cstskm_user_x_app_role z
             USING (
-                SELECT l_user_id user_id
+                SELECT p_user_id user_id
                     , p_target_app app_name
-                    , column_value AS role_name
-                FROM TABLE ( split_by_string (p_role_csv , ',' ) ) 
+                    , p_role AS role_name
+                FROM dual 
                 ) q
             ON ( q.user_id = z.user_id 
               AND q.app_name = z.app_name 
@@ -538,19 +601,16 @@ BEGIN
                     , audit_user()
                     )
             ;
-        WHEN 'UPD'
-        THEN 
-            RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
         WHEN 'DEL'
         THEN 
-            RAISE_APPLICATION_ERROR( -20001, 'p_role_csv_flag= '||p_role_csv_flag ||' is not yet supported');
+            DELETE apex_cstskm_user_x_app_role
+            WHERE user_id = p_user_id
+              AND app_name = p_target_app
+              AND role_name = p_role
+              ;
+            pck_std_log.inf( 'deleted: '||sql%rowcount );
         END CASE; -- action
-    END CASE; -- authentication 
-EXCEPTION 
-    WHEN OTHERS THEN 
-        pck_std_log.err( a_errno=> sqlcode, a_text=> substr( sqlerrm ||' '|| 'uname: '||p_user_uniq_name ||' app:'||p_target_app ||' csv:'||p_role_csv, 1, 1000) );
-        RAISE;
-END set_app_roles;
+END cst_auth_app_role_action;
 
 PROCEDURE process_app_role_requests
     ( p_req_ids_csv VARCHAR2 
@@ -559,6 +619,7 @@ PROCEDURE process_app_role_requests
     )
  AS
     l_distinct_user_x_app NUMBER;
+    l_distinct_app NUMBER;
     l_role_csv VARCHAR2(1000);
     l_app_name v_app_role_request_union_all.app_name%TYPE; 
     l_user_uniq_name v_app_role_request_union_all.user_name%TYPE; 
@@ -571,7 +632,9 @@ BEGIN
     END IF;
 
     SELECT COUNT(DISTINCT app_name ||'<#>' || user_name )
+        ,  COUNT(DISTINCT app_name )
     INTO l_distinct_user_x_app
+        ,l_distinct_app 
     FROM v_app_role_request_union_all
     WHERE req_id IN ( 
         SELECT column_value as id 
@@ -584,12 +647,13 @@ BEGIN
     WHEN l_distinct_user_x_app = 0
     THEN 
         RAISE_APPLICATION_ERROR ( -20001, 'It seems the request_id values are either non-existing or have improper status for this processing!');
-    WHEN l_distinct_user_x_app > 1 
+    WHEN l_distinct_app > 1 
     THEN 
-        RAISE_APPLICATION_ERROR ( -20001, 'FOR safety reason this procedure must not process for more than 1 app and 1 user!');
+        RAISE_APPLICATION_ERROR ( -20001, 'FOR safety reason this procedure must not process for more than 1 app!');
     ELSE NULL;
     END CASE; -- check l_distinct_user_x_app
 
+    -- following code just for lookup, MUST be removed later !
     SELECT listagg( req.role_name, ',') WITHIN GROUP (ORDER BY req.app_name)
         , req.app_name, req.user_name
     INTO l_role_csv
@@ -615,6 +679,41 @@ BEGIN
          ) ;
     ELSE NULL;
     END CASE; -- p_action 
+
+    FOR lr IN ( 
+        SELECT app_name, user_name, role_name, req_action 
+            ,(select id FROM apex_cstskm_user u WHERE u.user_uniq_name = req.user_name) AS cstskm_user_id 
+        FROM v_app_role_request_union_all req
+        WHERE req.req_id IN ( 
+            SELECT column_value as id 
+            FROM TABLE( split_by_string (p_req_ids_csv, ',')) )
+          AND req_source = p_req_source
+          AND status = 'PENDING'
+          AND req_action = CASE WHEN p_action = 'REJECT' THEN 'REVOKE' ELSE p_action END -- fixme: need to rethink about this
+    ) LOOP 
+        CASE p_req_source
+        WHEN c_auth_method_apex
+        THEN 
+            apex_auth_app_role_action
+            ( p_user_uniq_name                => lr.user_name
+              ,p_target_app                   => lr.app_name
+              ,p_role                         => lr.role_name
+              ,p_action                       => p_action 
+            );
+        WHEN c_auth_method_custom
+        THEN 
+oops( $$plsql_line )                ;
+/*cst_auth_app_role_action
+( p_user_id                       NUMBER
+  ,p_target_app                   VARCHAR2
+  ,p_role                         VARCHAR2
+  ,p_action                       VARCHAR2
+  );
+  */
+        END CASE; -- auth  
+    END LOOP;
+
+    -- by now we have "delivered" on the requests, Update the request records 
     CASE p_req_source
     WHEN c_auth_method_apex
     THEN 
@@ -679,6 +778,68 @@ BEGIN
     ); 
 
 END verify_password;
+
+PROCEDURE submit_app_role_requests_by_json 
+( p_app_name VARCHAR2 DEFAULT NULL 
+ ,p_json     VARCHAR2
+) AS 
+BEGIN
+/* example to extract values from  a JSON array of records , demonstrating the beauty of flexible schema:
+
+SELECT *
+FROM JSON_TABLE(
+      '[{a:1, b:2, x:3}, {a:4, b:5, y:6}, {a:7, bbb:8, z:9}]'
+      , '$[*]'
+        COLUMNS(a, b)
+    );
+
+A    B
+____ ____
+1    2
+4    5
+7
+
+*/ 
+    pck_std_log.inf ( 'json: '|| p_json );
+    FOR rec IN (
+        WITH json_data AS (
+            SELECT role
+                , gr AS grant_priv
+                , CASE gr 
+                    WHEN 'Y' THEN 'GRANT'
+                    WHEN 'N' THEN 'REVOKE'
+                  END 
+                  AS action 
+                , app_user AS app_user
+            FROM JSON_TABLE( p_json , '$[*]'
+                    COLUMNS(role,  gr, app_user)
+                    )
+        )
+        SELECT app_user , action 
+            ,listagg( role, ',' ) WITHIN GROUP (ORDER BY role) as role_csv 
+        FROM json_data
+        GROUP BY app_user, action 
+    ) LOOP 
+        pck_std_log.inf ( ' role_csv: '|| rec.role_csv|| ' action: '|| rec.action|| ' app_user: '|| rec.app_user  );
+        request_app_roles 
+                ( p_user_uniq_name       => rec.app_user
+          ,p_target_app                  => p_app_name
+          ,p_role_csv                    => rec.role_csv
+          ,p_action                      => rec.action 
+         );
+    END LOOP;
+END submit_app_role_requests_by_json;
+
+PROCEDURE process_app_role_requests_by_json
+( p_app_name VARCHAR2 DEFAULT NULL 
+ ,p_json     VARCHAR2
+) 
+AS 
+BEGIN 
+    pck_std_log.inf ( 'json: '|| p_json );
+    NULL;
+    -- before calling process_app_role_requests, the consent Y/N must be translated to GRANT OR REJECT ! 
+END process_app_role_requests_by_json;
 
 PROCEDURE init 
 AS 
