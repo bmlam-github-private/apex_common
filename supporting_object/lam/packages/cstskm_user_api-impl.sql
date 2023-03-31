@@ -2,6 +2,8 @@ CREATE OR REPLACE PACKAGE BODY cstskm_user_api
 AS
     g_basic_auth_done BOOLEAN;
     c_nl CONSTANT VARCHAR2(10) := chr(10);
+    gc_dummy_app_for_account_request VARCHAR2(100) := 'DUMMY_APP(REQUEST ACCOUNT)';
+    gc_dummy_role_for_account_request  VARCHAR2(100) := 'DUMMY_ROLE(REQUEST ACCOUNT)';
 
 /* based on a context definition, most routine in this package need to decide if the customer data model applies
    or should be ignored. For example to request access to an app, in case 1, we need to make sure a row will be 
@@ -20,6 +22,15 @@ c_auth_method_custom CONSTANT VARCHAR2(10) := 'CUSTOM';
 c_fixed_workspace CONSTANT VARCHAR2(10) := 'LAM';
 
 g_auth_method VARCHAR2(10) := c_auth_method_apex; -- should be retreived from APEX! 
+
+
+PROCEDURE request_app_roles_return_req_ids 
+ ( p_user_uniq_name               VARCHAR2                         
+  ,p_target_app                   VARCHAR2        DEFAULT NULL                    
+  ,p_role_csv                     VARCHAR2                           
+  ,p_action                       VARCHAR2        DEFAULT 'GRANT'                 
+  ,po_out_req_id        OUT    dbms_sql.number_table  
+ ) ;
 
 PROCEDURE oops( p_line NUMBER ) AS BEGIN RAISE_APPLICATION_ERROR( -20001, 'oops called from line '||p_line|| ' of '||$$plsql_unit ) ;
 END oops
@@ -268,6 +279,8 @@ PROCEDURE request_account
     l_user_name_used VARCHAR2(100);
     l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
     l_password_ok BOOLEAN;
+    lt_req_id dbms_sql.number_table;
+    l_dist_pw_cnt NUMBER; 
 BEGIN
     l_user_name_used := upper( p_user_uniq_name );
     l_app_name_used := upper( coalesce( p_target_app, v('APP_NAME')) );
@@ -336,13 +349,47 @@ BEGIN
         ;
         IF  p_is_new_user 
         THEN 
+            --
+            -- we also need to guard against multiple request from different apps for the same account ! 
+            --
+
             IF l_user_exists > 0 THEN 
                 RAISE_APPLICATION_ERROR( -20001, 'This user already exists and therefore cannot be created!');
             END IF;
 
-            -- Create user account 
-                RAISE_APPLICATION_ERROR( -20001, 'The current Authentication method is '|| g_auth_method
-                    ||', new user must be created by the workspace admin!');
+            -- Do not Create user account just yet, add item to request table 
+            --    RAISE_APPLICATION_ERROR( -20001, 'The current Authentication method is '|| g_auth_method
+            --        ||', new user must be created by the workspace admin!');
+            -- to fix above error, we may need a background job , but lets try it here anyway
+
+            request_app_roles_return_req_ids
+                    ( p_user_uniq_name       => l_user_name_used
+              ,p_target_app                  => get_dummy_app_for_account_req  
+              ,p_role_csv                    => gc_dummy_role_for_account_request
+              ,p_action                      => 'GRANT'
+              ,po_out_req_id => lt_req_id
+             );
+
+            INSERT INTO apex_wkspauth_acc_req_token
+            ( req_id,   origin_app_name
+             ,my_token
+            ) VALUES 
+            ( lt_req_id(1),   l_app_name_used
+            , temp_encrypted ( p_password )
+            );
+            SELECT COUNT(DISTINCT tok.my_token )
+            INTO l_dist_pw_cnt 
+            FROM apex_wkspauth_app_role_request req 
+            JOIN apex_wkspauth_acc_req_token tok 
+            ON tok.req_id = req.id 
+            WHERE req.apex_user_name = l_user_name_used
+            GROUP BY req.apex_user_name 
+            ;
+            IF l_dist_pw_cnt > 1 
+            THEN 
+                RAISE_APPLICATION_ERROR( -20001, 'There is another account request for the same user but with a different password hash!');
+            END IF;
+
         ELSE 
             l_password_ok := APEX_UTIL.IS_LOGIN_PASSWORD_VALID
                 (  p_username => l_user_name_used -- APEX workspace username is case-insensitive! 
@@ -371,12 +418,33 @@ PROCEDURE request_app_roles
   ,p_role_csv                     VARCHAR2                           
   ,p_action                       VARCHAR2        DEFAULT 'GRANT'                 
  ) AS 
+   lt_dummy_req_id dbms_sql.number_table ; 
+ BEGIN 
+     request_app_roles_return_req_ids 
+     ( p_user_uniq_name               => p_user_uniq_name                         
+      ,p_target_app                   => p_target_app               
+      ,p_role_csv                     => p_role_csv                        
+      ,p_action                       => p_action                 
+      ,po_out_req_id => lt_dummy_req_id 
+     ) ;
+ END request_app_roles;
+
+PROCEDURE request_app_roles_return_req_ids 
+ ( p_user_uniq_name               VARCHAR2                         
+  ,p_target_app                   VARCHAR2        DEFAULT NULL                    
+  ,p_role_csv                     VARCHAR2                           
+  ,p_action                       VARCHAR2        DEFAULT 'GRANT'                 
+  ,po_out_req_id        OUT    dbms_sql.number_table  
+ ) AS 
  /*
         This procedure will  add rows in the request table for App-user-role relation in PENDING status 
 */
     l_user_id apex_cstskm_user.id%TYPE;
     l_app_name_used apex_cstskm_app_role_request.app_name%TYPE := upper( coalesce( p_target_app, v('APP_NAME')) );
     l_merge_cnt NUMBER;
+    l_req_id NUMBER;
+
+
 BEGIN
     IF g_auth_method = c_auth_method_custom THEN
         BEGIN
@@ -424,9 +492,19 @@ BEGIN
                     UPDATE 
                     SET updated = sysdate, updated_by = audit_user()
                     WHERE status = 'PENDING'
+-- this does not compile. will have to select from the table!                RETURNING z.id INTO lt_out_req_id( lt_out_req_id.count + 1)
                 ;
-
+              SELECT id 
+              INTO l_req_id 
+              FROM apex_wkspauth_app_role_request
+              WHERE role_name = rec.role_name
+                AND apex_user_name = p_user_uniq_name
+                AND app_name = l_app_name_used
+                AND action = p_action
+              ;
               pck_std_log.inf( ' MERGEd rows:' ||sql%rowcount );
+
+              po_out_req_id( po_out_req_id.count + 1) := l_req_id;
             WHEN g_auth_method = c_auth_method_custom 
             THEN 
                 MERGE INTO apex_cstskm_app_role_request z
@@ -482,7 +560,7 @@ EXCEPTION
     WHEN OTHERS THEN
         pck_std_log.err( a_errno=> sqlcode, a_text=>  sqlerrm ||c_nl||dbms_utility.format_call_stack);
         RAISE;
-END request_app_roles;
+END request_app_roles_return_req_ids;
 
    
 PROCEDURE set_app_roles -- this procedure is being phased out! replacements are the more granular/atomic procedures 
@@ -991,6 +1069,76 @@ EXCEPTION
         RAISE;
 
 END process_app_role_requests_by_json;
+
+PROCEDURE process_wrksp_account_req_by_job 
+( p_user_uniq_name VARCHAR2
+ ,p_web_password_encrypted   VARCHAR2 
+ ,p_request_id NUMBER 
+) /* create the scheduler job which will call APEX_UTIL.create_user 
+* will busy await a bit to check if the job has updated the request status 
+*/
+AS 
+    l_plsql_block VARCHAR2(10000) := 
+    q'[ DECLARE
+             l_workspace_id      number;
+         BEGIN
+             l_workspace_id := apex_util.find_security_group_id (p_workspace => 'LAM');
+             apex_util.set_security_group_id (p_security_group_id => l_workspace_id);    
+             apex_util.create_user ( p_user_name => 'TEST_2023_03_01', p_web_password => 'silly-password' );
+         end;
+    ]'; 
+BEGIN   
+    l_plsql_block := 'not yet ready';
+    dbms_scheduler.create_job (
+            job_name           =>  'CRE_WRKSP_ACCOUNT_'||to_char( systimestamp ),
+            job_type           =>  'PLSQL_BLOCK',
+            job_action         =>  
+               q'{
+         }'
+            ,
+            start_date         =>  sysdate,
+            repeat_interval    =>  NULL,
+            enabled            =>  TRUE);
+
+END process_wrksp_account_req_by_job;
+
+PROCEDURE create_wrkspc_account_for_req 
+( p_user_uniq_name VARCHAR2
+ ,p_web_password_encrypted   VARCHAR2 
+ ,p_request_id NUMBER 
+) /* call APEX_UTIL.create_user and update the request status 
+*/
+AS 
+    l_workspace_id      number;
+    l_success BOOLEAN := TRUE;
+    BEGIN
+             l_workspace_id := apex_util.find_security_group_id (p_workspace => 'LAM');
+             apex_util.set_security_group_id (p_security_group_id => l_workspace_id);    
+
+    FOR rec IN (
+            SELECT id 
+            FROM apex_wkspauth_app_role_request
+            WHERE id = p_request_id
+        ) LOOP 
+            BEGIN 
+                apex_util.create_user ( p_user_name => p_user_uniq_name, p_web_password => p_web_password_encrypted );
+             -- 
+            EXCEPTION
+            WHEN others THEN 
+                l_success := FALSE;
+            END;
+
+--            UPDATE apex_wkspauth_app_role_request 
+--          SET status = CASE l_success WHEN TRUE 
+    END LOOP;
+END create_wrkspc_account_for_req;
+
+FUNCTION get_dummy_app_for_account_req 
+RETURN VARCHAR2
+AS 
+BEGIN
+    RETURN gc_dummy_app_for_account_request;
+END get_dummy_app_for_account_req;
 
 PROCEDURE init 
 AS 

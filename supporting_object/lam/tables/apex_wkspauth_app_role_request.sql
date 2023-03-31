@@ -18,8 +18,14 @@ CREATE TABLE apex_wkspauth_app_role_request
 
 
 COMMENT ON TABLE apex_wkspauth_app_role_request IS 
-'Since we are extending the functionality of role request to APEX, we use this table to manage the requests '
+'Since we are extending the functionality of role request to APEX, we use this table to manage the requests 
+Entries in this table are supposed to be archived to a history table once the request has reached a "final"
+status. This should facilitate this sequence of events: request GRANT, request granted, request REVOKE, request granted , request GRANT again.
+The archival should be performed by a regular job.
+'
 ;
 
+ALTER TABLE apex_wkspauth_app_role_request ADD ( PRIMARY KEY (id))
+;
 ALTER TABLE apex_wkspauth_app_role_request ADD ( action VARCHAR2(10) DEFAULT 'GRANT')
 ;

@@ -99,6 +99,17 @@ PROCEDURE process_app_role_requests_by_json
  ,p_json     VARCHAR2
 ) ; 
 
+
+FUNCTION get_dummy_app_for_account_req 
+/* allow APEX App to filter on requests which are not targeted for a specific app, but targeted for an
+  workspace account, the report query shall filter to requests for the dummy role 
+  The motivation is that app admin can process both app role and account request.
+  supposing the app is allowed to have account request feature 
+*/
+RETURN VARCHAR2
+;
+
+
 END;
 /
 
