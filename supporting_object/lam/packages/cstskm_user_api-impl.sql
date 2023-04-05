@@ -275,6 +275,7 @@ PROCEDURE request_account
         * add a row to the table APEX_CSTSKM_APP_ROLE_REQUEST using the most basic role of the app. This role is looked up from APEX_CSTSKM_APP_ROLE_LKUP
 */
     l_user_exists NUMBER;
+    l_req_id_exist NUMBER;
     l_app_name_used apex_cstskm_app_role_request.app_name%TYPE;
     l_user_name_used VARCHAR2(100);
     l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
@@ -363,13 +364,27 @@ BEGIN
             -- to fix above error, we may need a background job , but lets try it here anyway
 
             request_app_roles_return_req_ids
-                    ( p_user_uniq_name       => l_user_name_used
-              ,p_target_app                  => get_dummy_app_for_account_req  
+            ( p_user_uniq_name       => l_user_name_used
+              ,p_target_app                  => l_app_name_used
               ,p_role_csv                    => gc_dummy_role_for_account_request
               ,p_action                      => 'GRANT'
               ,po_out_req_id => lt_req_id
              );
 
+            IF lt_req_id.count = 0 THEN 
+
+                RAISE_APPLICATION_ERROR( -20001, 'Oops, no request ids returned');
+            END IF;
+            pck_std_log.inf ( 'req_id: '|| lt_req_id(1));
+            SELECT count(1)
+            INTO l_req_id_exist
+            FROM apex_wkspauth_acc_req_token
+            WHERE req_id = lt_req_id(1)
+            ;
+            IF l_req_id_exist > 0
+            THEN 
+                RAISE_APPLICATION_ERROR( -20001, 'Oops, the request id already exists!');
+            END IF;
             INSERT INTO apex_wkspauth_acc_req_token
             ( req_id,   origin_app_name
              ,my_token
