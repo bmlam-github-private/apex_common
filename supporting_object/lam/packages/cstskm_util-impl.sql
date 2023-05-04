@@ -33,27 +33,33 @@ PROCEDURE cre_wrksp_user_scheduler_job
   An app admin clicks some button in an APEX page which eventually will run this procedure. Calling create_user from the
   APEX session would not work!
 */ 
-	l_raw_password_as_varchar2 VARCHAR2(1000) ;
+	--l_raw_password_as_varchar2 VARCHAR2(1000) ;
+	l_job_action VARCHAR2(32000);
 	l_job_action_template VARCHAR2(32000) :=
-    	q'{BEGIN 
-apex_util.create_user ( p_user_name => '<user_name>'
+    	q'{
+DECLARE 
+       l_workspace_id      number;
+BEGIN 
+  l_workspace_id := apex_util.find_security_group_id (p_workspace => 'LAM');
+  apex_util.set_security_group_id (p_security_group_id => l_workspace_id);
+	apex_util.create_user ( p_user_name => '<user_name>'
 		, p_web_password => cstskm_util.decrypted( '<raw_password_as_varchar2>' )
 		);
-    	 END;}'
+END;}'
     	 ;
 BEGIN 
 	-- we cannot imbed a raw value (the encrypted password) in the anonymous PLSQL block, therefore we need to convert it 
 	-- to VARCHAR2  
-	l_raw_password_as_varchar2 := utl_raw.CAST_TO_VARCHAR2 (encrypted_password);
-  DBMS_SCHEDULER.CREATE_JOB (
-    job_name        => 'create-'||user_uniq_name,
-    job_type        => 'PLSQL_BLOCK',
-    job_action      => 
-    	replace( 
+	--l_raw_password_as_varchar2 := utl_raw.CAST_TO_VARCHAR2 (encrypted_password);
+	l_job_action := replace( 
 	    	replace( l_job_action_template, '<user_name>', user_uniq_name )
-	    		, 'raw_password_as_varchar2', l_raw_password_as_varchar2
-    		)
-,
+	    		, '<raw_password_as_varchar2>', encrypted_password -- l_raw_password_as_varchar2
+    		);
+	pck_std_log.inf ( $$plsql_unit||':'||$$plsql_line ||' '||l_job_action );
+  DBMS_SCHEDULER.CREATE_JOB (
+    job_name        => 'create_'||user_uniq_name,
+    job_type        => 'PLSQL_BLOCK',
+    job_action      => l_job_action,
     start_date      => SYSTIMESTAMP,
     repeat_interval => NULL,
     end_date        => NULL,
