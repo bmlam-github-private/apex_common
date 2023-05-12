@@ -2,8 +2,8 @@ CREATE OR REPLACE PACKAGE BODY cstskm_user_api
 AS
     g_basic_auth_done BOOLEAN;
     c_nl CONSTANT VARCHAR2(10) := chr(10);
-    gc_dummy_app_for_account_request VARCHAR2(100) := 'DUMMY_APP(REQUEST ACCOUNT)';
-    gc_dummy_role_for_account_request  VARCHAR2(100) := 'DUMMY_ROLE(REQUEST ACCOUNT)';
+    gc_dummy_app_for_account_request CONSTANT VARCHAR2(100) := 'DUMMY_APP(REQUEST ACCOUNT)';
+    gc_dummy_role_for_account_request  CONSTANT VARCHAR2(100) := 'DUMMY_ROLE(REQUEST ACCOUNT)';
 
 /* based on a context definition, most routine in this package need to decide if the customer data model applies
    or should be ignored. For example to request access to an app, in case 1, we need to make sure a row will be 
@@ -685,11 +685,22 @@ BEGIN
     CASE p_action 
     WHEN 'GRANT'
     THEN
-        apex_acl.add_user_role
-                ( p_application_id => p_app_id 
-                 ,p_user_name => p_user_uniq_name
-                 ,p_role_static_id => p_role 
-                );
+        IF p_role = gc_dummy_role_for_account_request 
+        THEN 
+            -- need to retrieve password 
+            cstskm_util.cre_wrksp_user_scheduler_job
+                ( user_uniq_name => p_user_uniq_name
+                 ,encrypted_password --RAW 
+                    => cstskm_util.encrypted ('top-secret')
+                ) ;
+
+        ELSE 
+            apex_acl.add_user_role
+                    ( p_application_id => p_app_id 
+                     ,p_user_name => p_user_uniq_name
+                     ,p_role_static_id => p_role 
+                    );
+        END IF;
     WHEN  'REVOKE'
     THEN 
         apex_acl.remove_user_role
@@ -764,6 +775,7 @@ PROCEDURE process_app_role_requests
     l_app_name v_app_role_request_union_all.app_name%TYPE; 
     l_user_uniq_name v_app_role_request_union_all.user_name%TYPE; 
     l_process_mode  VARCHAR2(10);
+    l_encrypted_password apex_wkspauth_acc_req_token.my_token%TYPE;
 BEGIN   
     IF upper( p_action ) NOT IN ( 'GRANT', 'REJECT')
     THEN 
@@ -821,6 +833,7 @@ BEGIN
     FOR lr IN ( 
         SELECT app_name, user_name, role_name, req_action 
             ,(select id FROM apex_cstskm_user u WHERE u.user_uniq_name = req.user_name) AS cstskm_user_id 
+            , req.req_id  
         FROM v_app_role_request_union_all req
         WHERE req.req_id IN ( 
             SELECT column_value as id 
@@ -832,57 +845,70 @@ BEGIN
         CASE p_req_source
         WHEN c_auth_method_apex
         THEN 
-            apex_auth_app_role_action
-            ( p_user_uniq_name                => lr.user_name
-              --,p_target_app                   => lr.app_name
-              ,p_app_id                       => lr.app_name
-              ,p_role                         => lr.role_name
-              ,p_action                       => p_action 
-            );
+
+            IF lr.role_name = gc_dummy_role_for_account_request
+            THEN
+                -- need to retrieve password
+                SELECT my_token 
+                INTO l_encrypted_password
+                FROM apex_wkspauth_acc_req_token
+                WHERE req_id = lr.req_id 
+                ;
+                cstskm_util.cre_wrksp_user_scheduler_job
+                    ( user_uniq_name => lr.user_name 
+                     ,encrypted_password --RAW
+                        => l_encrypted_password
+                    ) ;
+            ELSE 
+                apex_auth_app_role_action
+                ( p_user_uniq_name                => lr.user_name
+                  --,p_target_app                   => lr.app_name
+                  ,p_app_id                       => lr.app_name
+                  ,p_role                         => lr.role_name
+                  ,p_action                       => p_action 
+                );
+            END IF;
         WHEN c_auth_method_custom
         THEN 
 oops( $$plsql_line )                ;
-/*cst_auth_app_role_action
-( p_user_id                       NUMBER
-  ,p_target_app                   VARCHAR2
-  ,p_role                         VARCHAR2
-  ,p_action                       VARCHAR2
-  );
-  */
+
         END CASE; -- auth  
+
+        -- by now we have "delivered" on the requests, Update the request records 
+        CASE p_req_source
+        WHEN c_auth_method_apex
+        THEN 
+            IF lr.role_name = gc_dummy_role_for_account_request
+            THEN
+                            -- would be good to wait and check result and update status! 
+
+                oops( $$plsql_line ); 
+            ELSE 
+                UPDATE apex_wkspauth_app_role_request 
+                SET status = CASE p_action 
+                            WHEN 'GRANT' THEN 'APPROVED'
+                            WHEN 'REJECT' THEN 'REJECTED'
+                            END
+                , updated_by = audit_user()   
+                , updated = sysdate
+                WHERE id = lr.req_id 
+                ;
+            END IF;
+        WHEN c_auth_method_custom
+        THEN 
+                UPDATE apex_cstskm_app_role_request 
+                SET status = CASE p_action 
+                            WHEN 'GRANT' THEN 'APPROVED'
+                            WHEN 'REJECT' THEN 'REJECTED'
+                            END
+                , updated_by = audit_user()   
+                , updated = sysdate
+                WHERE id = lr.req_id 
+                ;
+        END CASE; -- auth  
+
     END LOOP;
 
-    -- by now we have "delivered" on the requests, Update the request records 
-    CASE p_req_source
-    WHEN c_auth_method_apex
-    THEN 
-            UPDATE apex_wkspauth_app_role_request 
-            SET status = CASE p_action 
-                        WHEN 'GRANT' THEN 'APPROVED'
-                        WHEN 'REJECT' THEN 'REJECTED'
-                        END
-            , updated_by = audit_user()   
-            , updated = sysdate
-            WHERE id IN ( 
-                SELECT column_value as id 
-                FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
-                )
-            ;
-    WHEN c_auth_method_custom
-    THEN 
-            UPDATE apex_cstskm_app_role_request 
-            SET status = CASE p_action 
-                        WHEN 'GRANT' THEN 'APPROVED'
-                        WHEN 'REJECT' THEN 'REJECTED'
-                        END
-            , updated_by = audit_user()   
-            , updated = sysdate
-            WHERE id IN ( 
-                SELECT column_value as id 
-                FROM TABLE( split_by_string (p_req_ids_csv, ',')) 
-                )
-            ;
-    END CASE; -- auth  
     -- COMMIT; 
 EXCEPTION
     WHEN OTHERS THEN
