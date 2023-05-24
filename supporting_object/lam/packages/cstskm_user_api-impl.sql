@@ -2,8 +2,6 @@ CREATE OR REPLACE PACKAGE BODY cstskm_user_api
 AS
     g_basic_auth_done BOOLEAN;
     c_nl CONSTANT VARCHAR2(10) := chr(10);
-    gc_dummy_app_for_account_request CONSTANT VARCHAR2(100) := 'DUMMY_APP(REQUEST ACCOUNT)';
-    gc_dummy_role_for_account_request  CONSTANT VARCHAR2(100) := 'DUMMY_ROLE(REQUEST ACCOUNT)';
 
 /* based on a context definition, most routine in this package need to decide if the customer data model applies
    or should be ignored. For example to request access to an app, in case 1, we need to make sure a row will be 
@@ -366,7 +364,7 @@ BEGIN
             request_app_roles_return_req_ids
             ( p_user_uniq_name       => l_user_name_used
               ,p_target_app                  => l_app_name_used
-              ,p_role_csv                    => gc_dummy_role_for_account_request
+              ,p_role_csv                    => cstskm_util.gc_dummy_role_for_account_request
               ,p_action                      => 'GRANT'
               ,po_out_req_id => lt_req_id
              );
@@ -685,7 +683,7 @@ BEGIN
     CASE p_action 
     WHEN 'GRANT'
     THEN
-        IF p_role = gc_dummy_role_for_account_request 
+        IF p_role = cstskm_util.gc_dummy_role_for_account_request 
         THEN 
             -- need to retrieve password 
             cstskm_util.cre_wrksp_user_scheduler_job
@@ -846,7 +844,7 @@ BEGIN
         WHEN c_auth_method_apex
         THEN 
 
-            IF lr.role_name = gc_dummy_role_for_account_request
+            IF lr.role_name = cstskm_util.gc_dummy_role_for_account_request
             THEN
                 -- need to retrieve password
                 SELECT my_token 
@@ -878,7 +876,7 @@ oops( $$plsql_line )                ;
         CASE p_req_source
         WHEN c_auth_method_apex
         THEN 
-            IF lr.role_name = gc_dummy_role_for_account_request
+            IF lr.role_name = cstskm_util.gc_dummy_role_for_account_request
             THEN
                             -- would be good to wait and check result and update status! 
 
@@ -886,7 +884,7 @@ oops( $$plsql_line )                ;
             ELSE 
                 UPDATE apex_wkspauth_app_role_request 
                 SET status = CASE p_action 
-                            WHEN 'GRANT' THEN 'APPROVED'
+                            WHEN 'GRANT' THEN 'OK_PENDING_CREATE'
                             WHEN 'REJECT' THEN 'REJECTED'
                             END
                 , updated_by = audit_user()   
@@ -1111,74 +1109,11 @@ EXCEPTION
 
 END process_app_role_requests_by_json;
 
-PROCEDURE process_wrksp_account_req_by_job 
-( p_user_uniq_name VARCHAR2
- ,p_web_password_encrypted   VARCHAR2 
- ,p_request_id NUMBER 
-) /* create the scheduler job which will call APEX_UTIL.create_user 
-* will busy await a bit to check if the job has updated the request status 
-*/
-AS 
-    l_plsql_block VARCHAR2(10000) := 
-    q'[ DECLARE
-             l_workspace_id      number;
-         BEGIN
-             l_workspace_id := apex_util.find_security_group_id (p_workspace => 'LAM');
-             apex_util.set_security_group_id (p_security_group_id => l_workspace_id);    
-             apex_util.create_user ( p_user_name => 'TEST_2023_03_01', p_web_password => 'silly-password' );
-         end;
-    ]'; 
-BEGIN   
-    l_plsql_block := 'not yet ready';
-    dbms_scheduler.create_job (
-            job_name           =>  'CRE_WRKSP_ACCOUNT_'||to_char( systimestamp ),
-            job_type           =>  'PLSQL_BLOCK',
-            job_action         =>  
-               q'{
-         }'
-            ,
-            start_date         =>  sysdate,
-            repeat_interval    =>  NULL,
-            enabled            =>  TRUE);
-
-END process_wrksp_account_req_by_job;
-
-PROCEDURE create_wrkspc_account_for_req 
-( p_user_uniq_name VARCHAR2
- ,p_web_password_encrypted   VARCHAR2 
- ,p_request_id NUMBER 
-) /* call APEX_UTIL.create_user and update the request status 
-*/
-AS 
-    l_workspace_id      number;
-    l_success BOOLEAN := TRUE;
-    BEGIN
-             l_workspace_id := apex_util.find_security_group_id (p_workspace => 'LAM');
-             apex_util.set_security_group_id (p_security_group_id => l_workspace_id);    
-
-    FOR rec IN (
-            SELECT id 
-            FROM apex_wkspauth_app_role_request
-            WHERE id = p_request_id
-        ) LOOP 
-            BEGIN 
-                apex_util.create_user ( p_user_name => p_user_uniq_name, p_web_password => p_web_password_encrypted );
-             -- 
-            EXCEPTION
-            WHEN others THEN 
-                l_success := FALSE;
-            END;
-
---            UPDATE apex_wkspauth_app_role_request 
---          SET status = CASE l_success WHEN TRUE 
-    END LOOP;
-END create_wrkspc_account_for_req;
-
-FUNCTION get_dummy_app_for_account_req 
+FUNCTION get_dummy_app_for_account_req -- probably APEX app need this? 
 RETURN VARCHAR2
 AS 
 BEGIN
-    RETURN gc_dummy_app_for_account_request;
+    RETURN cstskm_util.gc_dummy_app_for_account_request;
 END get_dummy_app_for_account_req;
 
 PROCEDURE init 

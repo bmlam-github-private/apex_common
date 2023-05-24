@@ -1,6 +1,8 @@
 CREATE OR REPLACE PACKAGE cstskm_util
 AS
 
+    gc_dummy_app_for_account_request CONSTANT VARCHAR2(100) := 'DUMMY_APP(REQUEST ACCOUNT)';
+    gc_dummy_role_for_account_request  CONSTANT VARCHAR2(100) := 'DUMMY_ROLE(REQUEST ACCOUNT)';
 
 FUNCTION encrypted
 ( string VARCHAR2
@@ -11,11 +13,6 @@ FUNCTION decrypted
 ( encrypted RAW 
 ) RETURN VARCHAR2 
 ;
-
-PROCEDURE cre_wrksp_user_scheduler_job
-( user_uniq_name VARCHAR2
- ,encrypted_password RAW 
-);
 
 END;
 /

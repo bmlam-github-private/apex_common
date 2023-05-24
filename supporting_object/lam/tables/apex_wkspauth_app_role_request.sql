@@ -29,3 +29,8 @@ ALTER TABLE apex_wkspauth_app_role_request ADD ( PRIMARY KEY (id))
 ;
 ALTER TABLE apex_wkspauth_app_role_request ADD ( action VARCHAR2(10) DEFAULT 'GRANT')
 ;
+ALTER TABLE apex_wkspauth_app_role_request DROP CONSTRAINT apex_wkspauth_app_role_req_stat_ck
+;
+ALTER TABLE apex_wkspauth_app_role_request ADD CONSTRAINT apex_wkspauth_app_role_req_stat_ck
+  CHECK ( status IN ( 'PENDING', 'APPROVED', 'REJECTED', 'OK_PENDING_CREATE') )
+;
