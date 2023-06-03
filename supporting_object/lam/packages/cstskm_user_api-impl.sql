@@ -685,13 +685,7 @@ BEGIN
     THEN
         IF p_role = cstskm_util.gc_dummy_role_for_account_request 
         THEN 
-            -- need to retrieve password 
-            cstskm_util.cre_wrksp_user_scheduler_job
-                ( user_uniq_name => p_user_uniq_name
-                 ,encrypted_password --RAW 
-                    => cstskm_util.encrypted ('top-secret')
-                ) ;
-
+            NULL; -- nothing to do? probably the call should not come here at all 
         ELSE 
             apex_acl.add_user_role
                     ( p_application_id => p_app_id 
@@ -846,17 +840,7 @@ BEGIN
 
             IF lr.role_name = cstskm_util.gc_dummy_role_for_account_request
             THEN
-                -- need to retrieve password
-                SELECT my_token 
-                INTO l_encrypted_password
-                FROM apex_wkspauth_acc_req_token
-                WHERE req_id = lr.req_id 
-                ;
-                cstskm_util.cre_wrksp_user_scheduler_job
-                    ( user_uniq_name => lr.user_name 
-                     ,encrypted_password --RAW
-                        => l_encrypted_password
-                    ) ;
+                NULL; -- nothing to do here, special status will be updated later  
             ELSE 
                 apex_auth_app_role_action
                 ( p_user_uniq_name                => lr.user_name
@@ -880,11 +864,19 @@ oops( $$plsql_line )                ;
             THEN
                             -- would be good to wait and check result and update status! 
 
-                oops( $$plsql_line ); 
-            ELSE 
                 UPDATE apex_wkspauth_app_role_request 
                 SET status = CASE p_action 
                             WHEN 'GRANT' THEN 'OK_PENDING_CREATE'
+                            WHEN 'REJECT' THEN 'REJECTED'
+                            END
+                , updated_by = audit_user()   
+                , updated = sysdate
+                WHERE id = lr.req_id 
+                ;
+            ELSE 
+                UPDATE apex_wkspauth_app_role_request 
+                SET status = CASE p_action 
+                            WHEN 'GRANT' THEN 'APPROVED'
                             WHEN 'REJECT' THEN 'REJECTED'
                             END
                 , updated_by = audit_user()   
