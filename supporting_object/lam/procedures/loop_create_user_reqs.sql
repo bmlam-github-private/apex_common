@@ -23,8 +23,10 @@ BEGIN
                 , tok.my_token 
               FROM apex_wkspauth_app_role_request req 
               JOIN apex_wkspauth_acc_req_token tok ON ( tok.req_id = req.id )
+              LEFT JOIN APEX_WORKSPACE_APEX_USERS wu ON wu.user_name = req.apex_user_name -- Workspace name ignored for now!
               WHERE req.role_name = cstskm_util. gc_dummy_role_for_account_request
                 AND req.status = 'OK_PENDING_CREATE'
+                AND wu.user_name IS NULL 
   	) 
   LOOP 
   pck_std_log.inf('lr_req.apex_user_name:'|| lr_req.apex_user_name );
