@@ -1,0 +1,1 @@
+-- this file can be deleted. what we need is a script to create the job which will run the loop procedure! 
