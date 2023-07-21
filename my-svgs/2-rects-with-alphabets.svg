@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="300">
+  <rect x="0" y="0" width="400" height="300" fill="#FFC107" />
+  <text x="50%" y="50%" font-size="40" font-family="Arial" text-anchor="middle" fill="#222" dominant-baseline="central">
+    A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
+  </text>
+  
+  <rect x="400" y="0" width="400" height="300" fill="#009688" />
+  <text x="600" y="50%" font-size="40" font-family="Arial" text-anchor="middle" fill="#FFF" dominant-baseline="central">
+    A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
+  </text>
+</svg>

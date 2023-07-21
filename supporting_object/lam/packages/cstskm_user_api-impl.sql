@@ -279,7 +279,8 @@ PROCEDURE request_account
     l_basic_role apex_cstskm_app_role_request.role_name%TYPE;
     l_password_ok BOOLEAN;
     lt_req_id dbms_sql.number_table;
-    l_dist_pw_cnt NUMBER; 
+    l_dist_pw_cnt  NUMBER; 
+    l_acc_request_rejected  NUMBER; 
 BEGIN
     l_user_name_used := upper( p_user_uniq_name );
     l_app_name_used := upper( coalesce( p_target_app, v('APP_NAME')) );
@@ -361,6 +362,20 @@ BEGIN
             --        ||', new user must be created by the workspace admin!');
             -- to fix above error, we may need a background job , but lets try it here anyway
 
+            -- Make sure no request exist in status REJECTED 
+            SELECT count(1)
+            INTO l_acc_request_rejected 
+            FROM v_app_role_request_union_all
+            WHERE role_name = 'DUMMY_ROLE(REQUEST ACCOUNT)'
+                AND user_name = l_user_name_used
+                AND status LIKE 'REJECT%' -- fix later 
+            ;
+            IF l_acc_request_rejected > 0
+            THEN
+                RAISE_APPLICATION_ERROR( -20001, 'At least one request for the given username has been rejected!');
+            END IF;
+
+            -- add the request record 
             request_app_roles_return_req_ids
             ( p_user_uniq_name       => l_user_name_used
               ,p_target_app                  => l_app_name_used
