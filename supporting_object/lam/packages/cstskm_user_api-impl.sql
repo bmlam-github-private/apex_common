@@ -366,7 +366,7 @@ BEGIN
             SELECT count(1)
             INTO l_acc_request_rejected 
             FROM v_app_role_request_union_all
-            WHERE role_name = 'DUMMY_ROLE(REQUEST ACCOUNT)'
+            WHERE role_name = apex_common_globals.gc_dummy_role_for_account_request
                 AND user_name = l_user_name_used
                 AND status LIKE 'REJECT%' -- fix later 
             ;
@@ -379,7 +379,7 @@ BEGIN
             request_app_roles_return_req_ids
             ( p_user_uniq_name       => l_user_name_used
               ,p_target_app                  => l_app_name_used
-              ,p_role_csv                    => cstskm_util.gc_dummy_role_for_account_request
+              ,p_role_csv                    => apex_common_globals.gc_dummy_role_for_account_request
               ,p_action                      => 'GRANT'
               ,po_out_req_id => lt_req_id
              );
@@ -698,7 +698,7 @@ BEGIN
     CASE p_action 
     WHEN 'GRANT'
     THEN
-        IF p_role = cstskm_util.gc_dummy_role_for_account_request 
+        IF p_role = apex_common_globals.gc_dummy_role_for_account_request 
         THEN 
             NULL; -- nothing to do? probably the call should not come here at all 
         ELSE 
@@ -853,7 +853,7 @@ BEGIN
         WHEN c_auth_method_apex
         THEN 
 
-            IF lr.role_name = cstskm_util.gc_dummy_role_for_account_request
+            IF lr.role_name = apex_common_globals.gc_dummy_role_for_account_request
             THEN
                 NULL; -- nothing to do here, special status will be updated later  
             ELSE 
@@ -875,7 +875,7 @@ oops( $$plsql_line )                ;
         CASE p_req_source
         WHEN c_auth_method_apex
         THEN 
-            IF lr.role_name = cstskm_util.gc_dummy_role_for_account_request
+            IF lr.role_name = apex_common_globals.gc_dummy_role_for_account_request
             THEN
                             -- would be good to wait and check result and update status! 
 
@@ -1023,13 +1023,15 @@ PROCEDURE process_app_role_requests_by_json
 AS 
     l_app_id NUMBER;
 BEGIN 
+    pck_std_log.inf ( 'p_app_name: '|| p_app_name|| ' json: '|| p_json );
     SELECT application_id
     INTO l_app_id 
-    FROM apex_applications 
-    WHERE upper( application_name ) = p_app_name 
+    FROM apex_applications a 
+    WHERE ( upper( application_name ) = p_app_name 
+        OR  upper( replace( a.application_name, ' ', '_') ) = p_app_name 
+        OR  a.alias /*always uppercase and space replaced by underscore?*/ = p_app_name )
     ;
 
-    pck_std_log.inf ( 'p_app_bname: '|| p_app_name|| ' json: '|| p_json );
     NULL;
 
     FOR rec IN (
@@ -1083,7 +1085,12 @@ BEGIN
             END IF;
             UPDATE apex_wkspauth_app_role_request req 
             SET status = CASE rec.to_do  
-                        WHEN 'GRANT'  THEN 'APPROVED'
+                        WHEN 'GRANT' THEN 
+                            CASE 
+                            WHEN apex_common_globals.gc_dummy_role_for_account_request = rec.role 
+                            THEN apex_common_globals.gc_status_ok_pending_create
+                            ELSE 'APPROVED'
+                            END 
                         WHEN 'REVOKE' THEN 'APPROVED'
                         WHEN 'NO_GRANT'  THEN 'REJECTED'
                         WHEN 'NO_REVOKE' THEN 'REJECTED'
@@ -1112,6 +1119,7 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN
         pck_std_log.err( a_errno=> sqlcode, a_text=>  sqlerrm ||c_nl||dbms_utility.format_call_stack );
+        pck_std_log.inf(  a_text=>  'error_stack:'||c_nl||dbms_utility.format_error_backtrace );
         RAISE;
 
 END process_app_role_requests_by_json;
@@ -1120,7 +1128,7 @@ FUNCTION get_dummy_app_for_account_req -- probably APEX app need this?
 RETURN VARCHAR2
 AS 
 BEGIN
-    RETURN cstskm_util.gc_dummy_app_for_account_request;
+    RETURN apex_common_globals.gc_dummy_app_for_account_request;
 END get_dummy_app_for_account_req;
 
 PROCEDURE init 
